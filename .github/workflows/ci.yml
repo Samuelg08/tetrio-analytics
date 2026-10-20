@@ -1,0 +1,154 @@
+# Propuesta de CI para TETR.IO Competitive Analytics (C11)
+# - Mientras un módulo aún no tenga su esqueleto inicializado, su job queda en estado
+#   SKIPPED (omitido) a nivel de job gracias a `detect_modules`, de modo que GitHub Actions
+#   NUNCA declara como satisfactorias (verde) pruebas que no se han ejecutado.
+# - Cuando `frontend/package.json` exista, se exige que `frontend/package-lock.json`
+#   esté versionado en Git antes de ejecutar `npm ci`.
+# - Sin Docker ni modificación automática de permisos o configuración remota del repositorio.
+
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  detect_modules:
+    name: Detect Initialized Modules
+    runs-on: ubuntu-latest
+    outputs:
+      backend_exists: ${{ steps.scan.outputs.backend_exists }}
+      frontend_exists: ${{ steps.scan.outputs.frontend_exists }}
+      ai_exists: ${{ steps.scan.outputs.ai_exists }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Check module skeletons
+        id: scan
+        run: |
+          if [ -f "backend/pom.xml" ]; then
+            echo "backend_exists=true" >> "$GITHUB_OUTPUT"
+            BACKEND_STATUS="Inicializado (se ejecutarán pruebas)"
+          else
+            echo "backend_exists=false" >> "$GITHUB_OUTPUT"
+            BACKEND_STATUS="No inicializado (PRUEBAS NO EJECUTADAS — job omitido)"
+          fi
+
+          if [ -f "frontend/package.json" ]; then
+            echo "frontend_exists=true" >> "$GITHUB_OUTPUT"
+            FRONTEND_STATUS="Inicializado (se ejecutarán pruebas)"
+          else
+            echo "frontend_exists=false" >> "$GITHUB_OUTPUT"
+            FRONTEND_STATUS="No inicializado (PRUEBAS NO EJECUTADAS — job omitido)"
+          fi
+
+          if [ -f "ai_service/requirements.txt" ] || [ -f "ai_service/pyproject.toml" ]; then
+            echo "ai_exists=true" >> "$GITHUB_OUTPUT"
+            AI_STATUS="Inicializado (se ejecutarán pruebas)"
+          else
+            echo "ai_exists=false" >> "$GITHUB_OUTPUT"
+            AI_STATUS="No inicializado (PRUEBAS NO EJECUTADAS — job omitido)"
+          fi
+
+          {
+            echo "### Estado de módulos y ejecución de pruebas"
+            echo "| Módulo | Estado |"
+            echo "|---|---|"
+            echo "| Backend (\`backend/pom.xml\`) | ${BACKEND_STATUS} |"
+            echo "| Frontend (\`frontend/package.json\`) | ${FRONTEND_STATUS} |"
+            echo "| AI Service (\`ai_service/\`) | ${AI_STATUS} |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  backend:
+    name: Backend (Java 21 + Maven Wrapper)
+    needs: detect_modules
+    if: needs.detect_modules.outputs.backend_exists == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Verify Maven Wrapper exists
+        working-directory: backend
+        run: |
+          if [ ! -f "./mvnw" ]; then
+            echo "::error::Falta backend/mvnw (Maven Wrapper obligatorio según C1)."
+            exit 1
+          fi
+          chmod +x ./mvnw
+
+      - name: Set up JDK 21 LTS
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+          cache-dependency-path: backend/pom.xml
+
+      - name: Run backend tests
+        working-directory: backend
+        run: ./mvnw -B test
+
+  frontend:
+    name: Frontend (Node 22 LTS + SvelteKit)
+    needs: detect_modules
+    if: needs.detect_modules.outputs.frontend_exists == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Verify frontend lockfile is committed
+        working-directory: frontend
+        run: |
+          if [ ! -f "package-lock.json" ]; then
+            echo "::error::Falta frontend/package-lock.json. El proyecto frontend debe incluir su lockfile para builds reproducibles."
+            exit 1
+          fi
+
+      - name: Set up Node.js 22 LTS
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies and run checks
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run check
+          npm test -- --run
+          npm run build
+
+  ai_service:
+    name: AI Service (Python 3.13 + pytest)
+    needs: detect_modules
+    if: needs.detect_modules.outputs.ai_exists == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.13
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Install dependencies and run pytest
+        working-directory: ai_service
+        run: |
+          python -m pip install --upgrade pip
+          if [ -f "requirements.txt" ]; then pip install -r requirements.txt; fi
+          if [ -f "pyproject.toml" ]; then pip install -e ".[dev]" || pip install .; fi
+          pytest
