@@ -1,0 +1,29 @@
+spring:
+  application:
+    name: tetrio-analytics-backend
+  config:
+    import: optional:file:.env[.properties]
+  jackson:
+    serialization:
+      write-dates-as-timestamps: false
+
+server:
+  port: ${SERVER_PORT:8080}
+
+springdoc:
+  api-docs:
+    path: /v3/api-docs
+  swagger-ui:
+    path: /swagger-ui.html
+
+app:
+  cors:
+    allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:5173}
+  tetra-channel:
+    base-url: ${TETRA_CHANNEL_BASE_URL:https://ch.tetr.io/api}
+    timeout-ms: ${TETRA_CHANNEL_TIMEOUT_MS:5000}
+    min-interval-ms: ${TETRA_CHANNEL_MIN_INTERVAL_MS:1100}
+    acquire-timeout-ms: ${TETRA_CHANNEL_ACQUIRE_TIMEOUT_MS:3000}
+    user-agent: tetrio-competitive-analytics-mvp/0.2
+  cache:
+    ttl-seconds: ${CACHE_TTL_SECONDS:300}

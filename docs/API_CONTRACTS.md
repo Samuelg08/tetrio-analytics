@@ -19,7 +19,7 @@ Estos contratos no afirman la disponibilidad de todos los datos externos. Este d
 | FastAPI — IA interna | `http://127.0.0.1:8000` | **No** |
 | SvelteKit — desarrollo | `http://localhost:5173` | — |
 
-Las rutas de OpenAPI son las predeterminadas de springdoc; confirmarlas en BE-001.
+Las rutas de OpenAPI son las predeterminadas de springdoc (`/v3/api-docs` y `/swagger-ui.html`), confirmadas en BE-001.
 
 ## 2. Convenciones
 
@@ -108,7 +108,7 @@ Todas las respuestas de error usan `Content-Type: application/problem+json`.
 
 El cliente de TETRA CHANNEL **no debe asumir** que cualquier respuesta con `success: false` equivale a `404 PLAYER_NOT_FOUND`. Debe clasificar la respuesta combinando el código HTTP, las cabeceras y el objeto `error` del envoltorio:
 
-1. **Jugador inexistente (`404 PLAYER_NOT_FOUND`):** únicamente cuando el proveedor devuelve HTTP 404 o `success: false` cuyo `error.msg` / código identifica inequívocamente que el usuario no existe (p. ej. `"No such user!"` o equivalente verificado en BE-001). En este caso no se reintenta.
+1. **Jugador inexistente (`404 PLAYER_NOT_FOUND`):** únicamente cuando el proveedor devuelve HTTP 404 o `success: false` cuyo `error.msg` / código identifica inequívocamente que el usuario no existe (verificado en BE-001: HTTP 404 con `"No such user! | Either you mistyped something, or the account no longer exists."`). En este caso no se reintenta.
 2. **Límite de solicitudes del proveedor o local:**
    - Si el rate limiter compartido local rechaza o expira la espera → `429 RATE_LIMITED` (o `200` con `dataSource: "stale"` si el jugador ya está en MongoDB).
    - Si TETRA CHANNEL devuelve HTTP 429 o `success: false` indicando exceso de solicitudes → activar pausa/backoff en el cliente y devolver `503 UPSTREAM_UNAVAILABLE` con `Retry-After` (o `200` con `dataSource: "stale"` si hay copia local).
@@ -192,7 +192,7 @@ Comportamiento:
 | `league.tr` | number \| null | `tr` | `-1` → `null`. |
 | `league.glicko` | number \| null | `glicko` | `-1` → `null`. |
 | `league.rd` | number \| null | `rd` | `-1` → `null`. La documentación indica que RD > 100 implica no clasificado. |
-| `league.gxe` | number \| null | `gxe` | `-1` → `null`. Escala (0–1 o 0–100) **a verificar**. |
+| `league.gxe` | number \| null | `gxe` | `-1` → `null`. Escala verificada en BE-001: `0–100` (porcentaje). |
 | `league.rank` | string \| null | `rank` | `z` → `null`. |
 | `league.bestRank` | string \| null | `bestrank` | `z` o ausente → `null`. |
 | `league.apm` | number \| null | `apm` | Ataque por minuto; media de las últimas 10 partidas. |
