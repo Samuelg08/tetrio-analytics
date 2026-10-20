@@ -1,0 +1,41 @@
+# Secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets/
+
+# Node
+node_modules/
+frontend/.svelte-kit/
+frontend/build/
+frontend/dist/
+npm-debug.log*
+
+# Java / Maven
+backend/target/
+*.class
+.idea/
+.vscode/
+*.iml
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+ai_service/artifacts/*
+!ai_service/artifacts/.gitkeep
+
+# Data and local outputs
+data/raw/*
+data/processed/*
+!data/raw/.gitkeep
+!data/processed/.gitkeep
+*.log
+.DS_Store
+Thumbs.db
