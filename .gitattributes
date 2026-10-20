@@ -1,0 +1,39 @@
+# Normalización de finales de línea para desarrollo multiplataforma (Windows / Linux / macOS)
+* text=auto eol=lf
+
+# Scripts shell y wrappers Unix siempre con LF
+*.sh text eol=lf
+mvnw text eol=lf
+
+# Scripts Windows con CRLF
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+
+# Código fuente, configuración y documentación en LF
+*.java text eol=lf
+*.xml text eol=lf
+*.properties text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.ts text eol=lf
+*.js text eol=lf
+*.svelte text eol=lf
+*.json text eol=lf
+*.css text eol=lf
+*.html text eol=lf
+*.py text eol=lf
+*.toml text eol=lf
+*.txt text eol=lf
+*.md text eol=lf
+
+# Binarios y artefactos
+*.jar binary
+*.joblib binary
+*.pkl binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.webp binary
+*.ico binary
+*.woff2 binary
