@@ -1,11 +1,13 @@
 package com.tetrio.analytics.player;
 
+import com.tetrio.analytics.common.PageResponse;
 import com.tetrio.analytics.integration.tetrachannel.TetraChannelClient;
 import com.tetrio.analytics.integration.tetrachannel.dto.TetraChannelResponse;
 import com.tetrio.analytics.integration.tetrachannel.dto.TetraLeagueSummaryData;
 import com.tetrio.analytics.integration.tetrachannel.dto.TetraUserData;
 import com.tetrio.analytics.player.dto.DataSource;
 import com.tetrio.analytics.player.dto.PlayerProfileResponse;
+import com.tetrio.analytics.player.dto.SnapshotItemDto;
 import com.tetrio.analytics.player.persistence.CacheWindowCalculator;
 import com.tetrio.analytics.player.persistence.CacheWindowCalculator.EffectiveCacheWindow;
 import com.tetrio.analytics.player.persistence.PlayerDocument;
@@ -15,6 +17,8 @@ import com.tetrio.analytics.problem.ApiProblemException;
 import com.tetrio.analytics.problem.ErrorCode;
 import java.time.Clock;
 import java.time.Instant;
+import java.time.format.DateTimeParseException;
+import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
 import java.util.UUID;
@@ -73,6 +77,69 @@ public class PlayerService {
         }
 
         return syncFromUpstream(normalizedPlayerId, existing);
+    }
+
+    public PageResponse<SnapshotItemDto> getSnapshots(
+            String rawPlayerId,
+            String rawFrom,
+            String rawTo,
+            int page,
+            int size
+    ) {
+        String normalizedPlayerId = normalizeAndValidatePlayerId(rawPlayerId);
+        if (page < 0) {
+            throw ApiProblemException.validationFailed("page", "El parámetro 'page' debe ser mayor o igual a 0");
+        }
+        if (size < 1 || size > 100) {
+            throw ApiProblemException.validationFailed("size", "El parámetro 'size' debe estar entre 1 y 100");
+        }
+
+        Instant fromInstant = parseOptionalInstant("from", rawFrom);
+        Instant toInstant = parseOptionalInstant("to", rawTo);
+        if (fromInstant != null && toInstant != null && fromInstant.isAfter(toInstant)) {
+            throw ApiProblemException.validationFailed("from", "El parámetro 'from' no puede ser posterior a 'to'");
+        }
+
+        PlayerDocument existing = findByPlayerIdSafe(normalizedPlayerId);
+        if (existing == null) {
+            throw new ApiProblemException(
+                    ErrorCode.PLAYER_NOT_FOUND,
+                    "El jugador solicitado no está almacenado en la base de datos local."
+            );
+        }
+
+        PageResponse<SnapshotDocument> rawPage = playerPersistenceService.findSnapshotsByPlayerId(
+                normalizedPlayerId,
+                fromInstant,
+                toInstant,
+                page,
+                size
+        );
+        List<SnapshotItemDto> items = rawPage.items().stream()
+                .map(playerMapper::toSnapshotItem)
+                .toList();
+
+        return new PageResponse<>(
+                items,
+                rawPage.page(),
+                rawPage.size(),
+                rawPage.totalItems(),
+                rawPage.totalPages()
+        );
+    }
+
+    private static Instant parseOptionalInstant(String fieldName, String rawValue) {
+        if (rawValue == null || rawValue.isBlank()) {
+            return null;
+        }
+        try {
+            return Instant.parse(rawValue.trim());
+        } catch (DateTimeParseException ex) {
+            throw ApiProblemException.validationFailed(
+                    fieldName,
+                    "Formato de fecha ISO 8601 no válido para '" + fieldName + "'"
+            );
+        }
     }
 
     private PlayerProfileResponse syncFromUpstream(String identifier, PlayerDocument existing) {

@@ -11,6 +11,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import com.tetrio.analytics.common.PageResponse;
 import com.tetrio.analytics.integration.tetrachannel.TetraChannelClient;
 import com.tetrio.analytics.integration.tetrachannel.dto.TetraChannelCache;
 import com.tetrio.analytics.integration.tetrachannel.dto.TetraChannelResponse;
@@ -19,9 +20,11 @@ import com.tetrio.analytics.integration.tetrachannel.dto.TetraUserData;
 import com.tetrio.analytics.player.dto.LeagueSummaryDto;
 import com.tetrio.analytics.player.persistence.PlayerDocument;
 import com.tetrio.analytics.player.persistence.PlayerPersistenceService;
+import com.tetrio.analytics.player.persistence.SnapshotDocument;
 import com.tetrio.analytics.problem.ApiProblemException;
 import com.tetrio.analytics.problem.ErrorCode;
 import java.time.Instant;
+import java.util.List;
 import java.util.Optional;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -254,5 +257,78 @@ class PlayerControllerIntegrationTest {
                 .andExpect(jsonPath("$.code").value("VALIDATION_FAILED"))
                 .andExpect(jsonPath("$.errors[0].field").value("playerId"))
                 .andExpect(jsonPath("$.errors[0].message").value("Formato de playerId no válido"));
+    }
+
+    @Test
+    void returnsPaginatedSnapshotsInAscendingOrderAndValidatesFilters() throws Exception {
+        String playerId = "5e9d4eec530bc13f9fdcd2c0";
+        Instant t1 = Instant.parse("2026-10-20T10:00:00Z");
+        Instant t2 = Instant.parse("2026-10-20T12:00:00Z");
+
+        PlayerDocument storedPlayer = new PlayerDocument(
+                "doc-1", playerId, "5han", "5han", "JP", null, null, t2, t1, t2.plusSeconds(300),
+                playerId + ":1", PlayerDocument.CURRENT_SCHEMA_VERSION
+        );
+        when(playerPersistenceService.findByExternalPlayerId(playerId))
+                .thenReturn(Optional.of(storedPlayer));
+
+        SnapshotDocument s1 = new SnapshotDocument(
+                "snap-1", playerId, playerId + ":1", t1, t1.plusSeconds(300), t1,
+                24800.0, 4600.0, 62.0, "x+",
+                new SnapshotDocument.SnapshotMetrics(168.0, 2.70, 349.0, 99.98, 1700, 1460, 2, 0.0, "x+", true, false),
+                null, SnapshotDocument.CURRENT_SCHEMA_VERSION
+        );
+        SnapshotDocument s2 = new SnapshotDocument(
+                "snap-2", playerId, playerId + ":2", t2, t2.plusSeconds(300), t2,
+                24863.06, 4662.16, 60.5, "x+",
+                new SnapshotDocument.SnapshotMetrics(170.6, 2.73, 353.52, 99.9993, 1711, 1471, 1, 0.0, "x+", true, false),
+                null, SnapshotDocument.CURRENT_SCHEMA_VERSION
+        );
+
+        when(playerPersistenceService.findSnapshotsByPlayerId(playerId, t1, t2, 0, 20))
+                .thenReturn(PageResponse.of(List.of(s1, s2), 0, 20, 2L));
+
+        mockMvc.perform(get("/api/players/" + playerId + "/snapshots")
+                        .param("from", "2026-10-20T10:00:00Z")
+                        .param("to", "2026-10-20T12:00:00Z")
+                        .param("page", "0")
+                        .param("size", "20"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.page").value(0))
+                .andExpect(jsonPath("$.size").value(20))
+                .andExpect(jsonPath("$.totalItems").value(2))
+                .andExpect(jsonPath("$.totalPages").value(1))
+                .andExpect(jsonPath("$.items[0].capturedAt").value("2026-10-20T10:00:00Z"))
+                .andExpect(jsonPath("$.items[0].tr").value(24800.0))
+                .andExpect(jsonPath("$.items[0].standing").value(2))
+                .andExpect(jsonPath("$.items[1].capturedAt").value("2026-10-20T12:00:00Z"))
+                .andExpect(jsonPath("$.items[1].tr").value(24863.06))
+                .andExpect(jsonPath("$.items[1].standing").value(1));
+
+        // from > to -> 400 VALIDATION_FAILED
+        mockMvc.perform(get("/api/players/" + playerId + "/snapshots")
+                        .param("from", "2026-10-20T15:00:00Z")
+                        .param("to", "2026-10-20T12:00:00Z"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("VALIDATION_FAILED"))
+                .andExpect(jsonPath("$.errors[0].field").value("from"));
+
+        // size > 100 -> 400 VALIDATION_FAILED
+        mockMvc.perform(get("/api/players/" + playerId + "/snapshots")
+                        .param("size", "101"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("VALIDATION_FAILED"))
+                .andExpect(jsonPath("$.errors[0].field").value("size"));
+    }
+
+    @Test
+    void returns404PlayerNotFoundWhenRequestingSnapshotsForUnstoredPlayer() throws Exception {
+        String unstoredId = "000000000000000000000099";
+        when(playerPersistenceService.findByExternalPlayerId(unstoredId))
+                .thenReturn(Optional.empty());
+
+        mockMvc.perform(get("/api/players/" + unstoredId + "/snapshots"))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value("PLAYER_NOT_FOUND"));
     }
 }

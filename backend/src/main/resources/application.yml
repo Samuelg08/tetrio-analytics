@@ -32,3 +32,14 @@ app:
     user-agent: tetrio-competitive-analytics-mvp/0.2
   cache:
     ttl-seconds: ${CACHE_TTL_SECONDS:300}
+  extraction:
+    enabled: ${EXTRACTION_ENABLED:false}
+    phases: ${EXTRACTION_PHASES:leaderboard_league}
+    batch-size: ${EXTRACTION_BATCH_SIZE:100}
+    max-pages: ${EXTRACTION_MAX_PAGES:0}
+    max-retries: ${EXTRACTION_MAX_RETRIES:3}
+    max-consecutive-errors: ${EXTRACTION_MAX_CONSECUTIVE_ERRORS:5}
+    raw-dir: ${EXTRACTION_RAW_DIR:../data/raw}
+    processed-dir: ${EXTRACTION_PROCESSED_DIR:../data/processed}
+    resume-run-id: ${EXTRACTION_RESUME_RUN_ID:}
+    dataset-version: ${EXTRACTION_DATASET_VERSION:}
