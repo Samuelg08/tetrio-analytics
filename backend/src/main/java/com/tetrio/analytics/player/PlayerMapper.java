@@ -1,10 +1,14 @@
 package com.tetrio.analytics.player;
 
+import com.tetrio.analytics.integration.tetrachannel.dto.TetraChannelCache;
 import com.tetrio.analytics.integration.tetrachannel.dto.TetraLeagueSummaryData;
 import com.tetrio.analytics.integration.tetrachannel.dto.TetraUserData;
 import com.tetrio.analytics.player.dto.DataSource;
 import com.tetrio.analytics.player.dto.LeagueSummaryDto;
 import com.tetrio.analytics.player.dto.PlayerProfileResponse;
+import com.tetrio.analytics.player.persistence.CacheWindowCalculator.EffectiveCacheWindow;
+import com.tetrio.analytics.player.persistence.PlayerDocument;
+import com.tetrio.analytics.player.persistence.SnapshotDocument;
 import com.tetrio.analytics.problem.ApiProblemException;
 import com.tetrio.analytics.problem.ErrorCode;
 import java.time.Instant;
@@ -23,28 +27,115 @@ public class PlayerMapper {
             Instant lastSyncedAt,
             DataSource dataSource
     ) {
-        if (userData == null
-                || userData.id() == null
-                || !MONGO_ID_PATTERN.matcher(userData.id()).matches()
-                || userData.username() == null
-                || userData.username().isBlank()) {
-            throw new ApiProblemException(
-                    ErrorCode.UPSTREAM_BAD_RESPONSE,
-                    "TETRA CHANNEL devolvió datos de perfil incompletos o con identificador inválido."
-            );
-        }
+        validateUserData(userData);
 
-        String normalizedCountry = (userData.country() == null || userData.country().isBlank())
-                ? null
-                : userData.country().trim().toUpperCase(Locale.ROOT);
+        String normalizedCountry = normalizeCountry(userData.country());
+        String normalizedUsername = userData.username().trim().toLowerCase(Locale.ROOT);
 
         return new PlayerProfileResponse(
                 userData.id(),
-                userData.username().trim().toLowerCase(Locale.ROOT),
+                normalizedUsername,
                 normalizedCountry,
                 lastSyncedAt,
                 dataSource,
                 toLeagueSummary(leagueData)
+        );
+    }
+
+    public PlayerProfileResponse fromPlayerDocument(PlayerDocument document, DataSource dataSource) {
+        if (document == null) {
+            throw new IllegalArgumentException("PlayerDocument no puede ser nulo.");
+        }
+        return new PlayerProfileResponse(
+                document.externalPlayerId(),
+                document.usernameLower(),
+                document.country(),
+                document.lastSyncedAt(),
+                dataSource,
+                document.league()
+        );
+    }
+
+    public PlayerDocument toPlayerDocument(
+            TetraUserData userData,
+            LeagueSummaryDto leagueSummary,
+            EffectiveCacheWindow cacheWindow,
+            Instant syncedAt
+    ) {
+        validateUserData(userData);
+        String normalizedUsername = userData.username().trim().toLowerCase(Locale.ROOT);
+        String normalizedCountry = normalizeCountry(userData.country());
+
+        PlayerDocument.ProfileMetadata profileMetadata = new PlayerDocument.ProfileMetadata(
+                normalizeNonNegativeDouble(userData.xp()),
+                normalizeNonNegativeDouble(userData.gametime())
+        );
+
+        return new PlayerDocument(
+                null,
+                userData.id(),
+                normalizedUsername,
+                normalizedUsername,
+                normalizedCountry,
+                profileMetadata,
+                leagueSummary,
+                syncedAt,
+                cacheWindow.windowStartAt(),
+                cacheWindow.windowUntilAt(),
+                cacheWindow.cacheWindowKey(),
+                PlayerDocument.CURRENT_SCHEMA_VERSION
+        );
+    }
+
+    public SnapshotDocument toSnapshotDocument(
+            TetraUserData userData,
+            LeagueSummaryDto leagueSummary,
+            EffectiveCacheWindow cacheWindow,
+            TetraChannelCache userCache,
+            TetraChannelCache leagueCache,
+            Instant capturedAt,
+            String sessionId
+    ) {
+        validateUserData(userData);
+
+        SnapshotDocument.SnapshotMetrics metrics = leagueSummary == null
+                ? null
+                : new SnapshotDocument.SnapshotMetrics(
+                        leagueSummary.apm(),
+                        leagueSummary.pps(),
+                        leagueSummary.vs(),
+                        leagueSummary.gxe(),
+                        leagueSummary.gamesPlayed(),
+                        leagueSummary.gamesWon(),
+                        leagueSummary.standing(),
+                        leagueSummary.percentile(),
+                        leagueSummary.bestRank(),
+                        leagueSummary.ranked(),
+                        leagueSummary.decaying()
+                );
+
+        SnapshotDocument.SnapshotSource source = new SnapshotDocument.SnapshotSource(
+                userCache != null ? userCache.cachedAt() : null,
+                userCache != null ? userCache.cachedUntil() : null,
+                leagueCache != null ? leagueCache.cachedAt() : null,
+                leagueCache != null ? leagueCache.cachedUntil() : null,
+                sessionId
+        );
+
+        return new SnapshotDocument(
+                null,
+                userData.id(),
+                cacheWindow.cacheWindowKey(),
+                cacheWindow.windowStartAt(),
+                cacheWindow.windowUntilAt(),
+                capturedAt,
+                leagueSummary != null ? leagueSummary.tr() : null,
+                leagueSummary != null ? leagueSummary.glicko() : null,
+                leagueSummary != null ? leagueSummary.rd() : null,
+                leagueSummary != null ? leagueSummary.rank() : null,
+                metrics,
+                source,
+                SnapshotDocument.CURRENT_SCHEMA_VERSION
         );
     }
 
@@ -77,6 +168,26 @@ public class PlayerMapper {
                 normalizeNonNegativeDouble(raw.percentile()),
                 Boolean.TRUE.equals(raw.decaying())
         );
+    }
+
+    private static void validateUserData(TetraUserData userData) {
+        if (userData == null
+                || userData.id() == null
+                || !MONGO_ID_PATTERN.matcher(userData.id()).matches()
+                || userData.username() == null
+                || userData.username().isBlank()) {
+            throw new ApiProblemException(
+                    ErrorCode.UPSTREAM_BAD_RESPONSE,
+                    "TETRA CHANNEL devolvió datos de perfil incompletos o con identificador inválido."
+            );
+        }
+    }
+
+    private static String normalizeCountry(String rawCountry) {
+        if (rawCountry == null || rawCountry.isBlank()) {
+            return null;
+        }
+        return rawCountry.trim().toUpperCase(Locale.ROOT);
     }
 
     private static String normalizeRank(String rawRank) {

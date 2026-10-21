@@ -28,7 +28,7 @@ public class PlayerController {
     @GetMapping(value = "/by-username/{username}", produces = MediaType.APPLICATION_JSON_VALUE)
     @Operation(
             summary = "Obtiene el perfil y resumen competitivo de TETRA LEAGUE por username",
-            description = "Normaliza y valida el username y consulta TETRA CHANNEL respetando el rate limiter compartido."
+            description = "Normaliza y valida el username, consulta caché local en MongoDB y, si expiró o no existe, sincroniza desde TETRA CHANNEL respetando el rate limiter compartido."
     )
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "Perfil del jugador obtenido correctamente"),
@@ -75,5 +75,57 @@ public class PlayerController {
     })
     public PlayerProfileResponse getByUsername(@PathVariable("username") String username) {
         return playerService.getByUsername(username);
+    }
+
+    @GetMapping(value = "/{playerId}", produces = MediaType.APPLICATION_JSON_VALUE)
+    @Operation(
+            summary = "Obtiene el perfil y resumen competitivo de TETRA LEAGUE por playerId (MongoID de 24 hex)",
+            description = "Valida el playerId, consulta caché local en MongoDB y, si expiró o no existe, sincroniza desde TETRA CHANNEL respetando el rate limiter compartido."
+    )
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "Perfil del jugador obtenido correctamente"),
+            @ApiResponse(
+                    responseCode = "400",
+                    description = "playerId con formato no válido (VALIDATION_FAILED)",
+                    content = @Content(
+                            mediaType = MediaType.APPLICATION_PROBLEM_JSON_VALUE,
+                            schema = @Schema(implementation = ProblemDetail.class)
+                    )
+            ),
+            @ApiResponse(
+                    responseCode = "404",
+                    description = "Jugador inexistente en TETRA CHANNEL (PLAYER_NOT_FOUND)",
+                    content = @Content(
+                            mediaType = MediaType.APPLICATION_PROBLEM_JSON_VALUE,
+                            schema = @Schema(implementation = ProblemDetail.class)
+                    )
+            ),
+            @ApiResponse(
+                    responseCode = "429",
+                    description = "Presupuesto local de solicitudes agotado (RATE_LIMITED)",
+                    content = @Content(
+                            mediaType = MediaType.APPLICATION_PROBLEM_JSON_VALUE,
+                            schema = @Schema(implementation = ProblemDetail.class)
+                    )
+            ),
+            @ApiResponse(
+                    responseCode = "502",
+                    description = "Respuesta inválida o error interno de TETRA CHANNEL (UPSTREAM_BAD_RESPONSE)",
+                    content = @Content(
+                            mediaType = MediaType.APPLICATION_PROBLEM_JSON_VALUE,
+                            schema = @Schema(implementation = ProblemDetail.class)
+                    )
+            ),
+            @ApiResponse(
+                    responseCode = "503",
+                    description = "Timeout o límite 429 impuesto por TETRA CHANNEL (UPSTREAM_UNAVAILABLE)",
+                    content = @Content(
+                            mediaType = MediaType.APPLICATION_PROBLEM_JSON_VALUE,
+                            schema = @Schema(implementation = ProblemDetail.class)
+                    )
+            )
+    })
+    public PlayerProfileResponse getByPlayerId(@PathVariable("playerId") String playerId) {
+        return playerService.getByPlayerId(playerId);
     }
 }

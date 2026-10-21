@@ -3,11 +3,15 @@ package com.tetrio.analytics.player;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import com.tetrio.analytics.integration.tetrachannel.dto.TetraChannelCache;
 import com.tetrio.analytics.integration.tetrachannel.dto.TetraLeagueSummaryData;
 import com.tetrio.analytics.integration.tetrachannel.dto.TetraUserData;
 import com.tetrio.analytics.player.dto.DataSource;
 import com.tetrio.analytics.player.dto.LeagueSummaryDto;
 import com.tetrio.analytics.player.dto.PlayerProfileResponse;
+import com.tetrio.analytics.player.persistence.CacheWindowCalculator.EffectiveCacheWindow;
+import com.tetrio.analytics.player.persistence.PlayerDocument;
+import com.tetrio.analytics.player.persistence.SnapshotDocument;
 import com.tetrio.analytics.problem.ApiProblemException;
 import com.tetrio.analytics.problem.ErrorCode;
 import java.time.Instant;
@@ -167,5 +171,44 @@ class PlayerMapperTest {
                 .isInstanceOf(ApiProblemException.class)
                 .satisfies(ex -> assertThat(((ApiProblemException) ex).errorCode())
                         .isEqualTo(ErrorCode.UPSTREAM_BAD_RESPONSE));
+    }
+
+    @Test
+    void mapsToAndFromPlayerDocumentAndSnapshotDocumentDeterministically() {
+        String playerId = "5e9d4eec530bc13f9fdcd2c0";
+        TetraUserData user = new TetraUserData(playerId, " 5HAN ", "jp", 68967953.6, 10482448.4);
+        TetraLeagueSummaryData rawLeague = new TetraLeagueSummaryData(
+                1711, 1471, 24863.06, 4662.16, 99.99, 99.9993,
+                "x+", "x+", 170.6, 2.73, 353.52, 1, 0.0, false
+        );
+        LeagueSummaryDto league = mapper.toLeagueSummary(rawLeague);
+        EffectiveCacheWindow window = new EffectiveCacheWindow(
+                1_700_000_000_000L,
+                1_700_000_600_000L,
+                playerId + ":1700000000000"
+        );
+        TetraChannelCache userCache = new TetraChannelCache("hit", 1_700_000_000_000L, 1_700_000_600_000L);
+        TetraChannelCache leagueCache = new TetraChannelCache("hit", 1_700_000_000_000L, 1_700_000_600_000L);
+
+        PlayerDocument playerDoc = mapper.toPlayerDocument(user, league, window, FIXED_NOW);
+        SnapshotDocument snapshotDoc = mapper.toSnapshotDocument(
+                user, league, window, userCache, leagueCache, FIXED_NOW, "live-session-1"
+        );
+
+        assertThat(playerDoc.externalPlayerId()).isEqualTo(playerId);
+        assertThat(playerDoc.usernameLower()).isEqualTo("5han");
+        assertThat(playerDoc.country()).isEqualTo("JP");
+        assertThat(playerDoc.activeCacheWindowKey()).isEqualTo(playerId + ":1700000000000");
+
+        assertThat(snapshotDoc.playerId()).isEqualTo(playerId);
+        assertThat(snapshotDoc.cacheWindowKey()).isEqualTo(playerId + ":1700000000000");
+        assertThat(snapshotDoc.rating()).isEqualTo(24863.06);
+        assertThat(snapshotDoc.source().sessionId()).isEqualTo("live-session-1");
+
+        PlayerProfileResponse fromCache = mapper.fromPlayerDocument(playerDoc, DataSource.CACHE);
+        assertThat(fromCache.playerId()).isEqualTo(playerId);
+        assertThat(fromCache.username()).isEqualTo("5han");
+        assertThat(fromCache.dataSource()).isEqualTo(DataSource.CACHE);
+        assertThat(fromCache.league()).isEqualTo(league);
     }
 }

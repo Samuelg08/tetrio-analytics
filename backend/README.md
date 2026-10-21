@@ -35,7 +35,13 @@ $env:RUN_LIVE_TETRA_TESTS="true"; ./mvnw.cmd -B -Dtest=PlayerLiveSmokeTest "-Dar
 ./mvnw.cmd spring-boot:run
 ```
 
-## Endpoints implementados (BE-001)
+## Endpoints implementados (BE-001 + BE-002)
 - `GET /api/health` — Estado del servicio (`200 OK` `{ "status": "UP" }`).
-- `GET /api/players/by-username/{username}` — Consulta en vivo (`dataSource: "live"`) de perfil y resumen de TETRA LEAGUE con normalización (`trim` + minúsculas), validación (`^[a-z0-9_-]{3,16}$`), rate limiter compartido (`<= 1 req/s`) y errores RFC 9457 `ProblemDetail` (`400`, `404`, `429`, `502`, `503`).
+- `GET /api/players/by-username/{username}` — Consulta de perfil y resumen de TETRA LEAGUE con normalización (`trim` + minúsculas), validación (`^[a-z0-9_-]{3,16}$`), caché local en MongoDB (`dataSource: "cache"` si `now < cacheValidUntil`), sincronización con TETRA CHANNEL (`dataSource: "live"`), degradación controlada (`dataSource: "stale"` si TETRA CHANNEL o el rate limiter rechazan la consulta pero existe copia local) y errores RFC 9457 `ProblemDetail` (`400`, `404`, `429`, `502`, `503`).
+- `GET /api/players/{playerId}` — Consulta equivalente por MongoID de 24 caracteres hexadecimales (`^[0-9a-f]{24}$`).
 - `GET /v3/api-docs` y `GET /swagger-ui.html` — Especificación OpenAPI v0.2 generada por `springdoc-openapi`.
+
+## Persistencia e índices (BE-002)
+- Colección `players`: índice único `{ externalPlayerId: 1 }` e índice de búsqueda `{ usernameLower: 1 }`.
+- Colección `snapshots`: índice único compuesto no-sparse `{ playerId: 1, cacheWindowKey: 1 }` e índice de historial `{ playerId: 1, capturedAt: -1 }`.
+- Upsert idempotente: `PlayerPersistenceService` actualiza `players` mediante `$set` y persiste `snapshots` con `$setOnInsert` bajo la clave determinista `cacheWindowKey = "${playerId}:${windowStartMs}"`.

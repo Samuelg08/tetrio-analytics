@@ -11,7 +11,7 @@ import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMock
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.web.servlet.MockMvc;
 
-@SpringBootTest
+@SpringBootTest(properties = "spring.data.mongodb.auto-index-creation=false")
 @AutoConfigureMockMvc
 class HealthControllerIntegrationTest {
 
@@ -32,6 +32,7 @@ class HealthControllerIntegrationTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.info.version").value("0.2.0"))
                 .andExpect(jsonPath("$.paths['/api/health']").exists())
-                .andExpect(jsonPath("$.paths['/api/players/by-username/{username}']").exists());
+                .andExpect(jsonPath("$.paths['/api/players/by-username/{username}']").exists())
+                .andExpect(jsonPath("$.paths['/api/players/{playerId}']").exists());
     }
 }

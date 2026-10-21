@@ -16,8 +16,13 @@ import com.tetrio.analytics.integration.tetrachannel.dto.TetraChannelCache;
 import com.tetrio.analytics.integration.tetrachannel.dto.TetraChannelResponse;
 import com.tetrio.analytics.integration.tetrachannel.dto.TetraLeagueSummaryData;
 import com.tetrio.analytics.integration.tetrachannel.dto.TetraUserData;
+import com.tetrio.analytics.player.dto.LeagueSummaryDto;
+import com.tetrio.analytics.player.persistence.PlayerDocument;
+import com.tetrio.analytics.player.persistence.PlayerPersistenceService;
 import com.tetrio.analytics.problem.ApiProblemException;
 import com.tetrio.analytics.problem.ErrorCode;
+import java.time.Instant;
+import java.util.Optional;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
@@ -26,7 +31,7 @@ import org.springframework.http.MediaType;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
-@SpringBootTest
+@SpringBootTest(properties = "spring.data.mongodb.auto-index-creation=false")
 @AutoConfigureMockMvc
 class PlayerControllerIntegrationTest {
 
@@ -35,6 +40,9 @@ class PlayerControllerIntegrationTest {
 
     @MockitoBean
     private TetraChannelClient tetraChannelClient;
+
+    @MockitoBean
+    private PlayerPersistenceService playerPersistenceService;
 
     @Test
     void returnsLivePlayerProfileForNormalizedUsername() throws Exception {
@@ -174,5 +182,77 @@ class PlayerControllerIntegrationTest {
                         .header("Origin", "http://malicious.example.com")
                         .header("Access-Control-Request-Method", "GET"))
                 .andExpect(status().isForbidden());
+    }
+
+    @Test
+    void returnsCachedAndStaleProfilesByPlayerIdEndpoint() throws Exception {
+        String playerId = "5e9d4eec530bc13f9fdcd2c0";
+        Instant now = Instant.now();
+        LeagueSummaryDto league = new LeagueSummaryDto(
+                1711, 1471, true, 24863.06, 4662.16, 99.99, 99.9993,
+                "x+", "x+", 170.6, 2.73, 353.52, 1, 0.0, false
+        );
+
+        PlayerDocument cachedDoc = new PlayerDocument(
+                "doc-1",
+                playerId,
+                "5han",
+                "5han",
+                "JP",
+                new PlayerDocument.ProfileMetadata(68967953.6, 10482448.4),
+                league,
+                now.minusSeconds(30),
+                now.minusSeconds(30),
+                now.plusSeconds(270),
+                playerId + ":" + now.minusSeconds(30).toEpochMilli(),
+                PlayerDocument.CURRENT_SCHEMA_VERSION
+        );
+        when(playerPersistenceService.findByExternalPlayerId(playerId))
+                .thenReturn(Optional.of(cachedDoc));
+
+        mockMvc.perform(get("/api/players/" + playerId.toUpperCase()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.playerId").value(playerId))
+                .andExpect(jsonPath("$.username").value("5han"))
+                .andExpect(jsonPath("$.dataSource").value("cache"));
+
+        PlayerDocument expiredDoc = new PlayerDocument(
+                "doc-1",
+                playerId,
+                "5han",
+                "5han",
+                "JP",
+                new PlayerDocument.ProfileMetadata(68967953.6, 10482448.4),
+                league,
+                now.minusSeconds(600),
+                now.minusSeconds(600),
+                now.minusSeconds(300),
+                playerId + ":" + now.minusSeconds(600).toEpochMilli(),
+                PlayerDocument.CURRENT_SCHEMA_VERSION
+        );
+        when(playerPersistenceService.findByExternalPlayerId(playerId))
+                .thenReturn(Optional.of(expiredDoc));
+        when(tetraChannelClient.fetchUser(eq(playerId), anyString()))
+                .thenThrow(new ApiProblemException(
+                        ErrorCode.UPSTREAM_UNAVAILABLE,
+                        "TETRA CHANNEL no disponible",
+                        10L
+                ));
+
+        mockMvc.perform(get("/api/players/" + playerId))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.playerId").value(playerId))
+                .andExpect(jsonPath("$.dataSource").value("stale"));
+    }
+
+    @Test
+    void returns400ValidationFailedProblemDetailForInvalidPlayerId() throws Exception {
+        mockMvc.perform(get("/api/players/invalid-mongo-id"))
+                .andExpect(status().isBadRequest())
+                .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON))
+                .andExpect(jsonPath("$.type").value("/problems/validation-failed"))
+                .andExpect(jsonPath("$.code").value("VALIDATION_FAILED"))
+                .andExpect(jsonPath("$.errors[0].field").value("playerId"))
+                .andExpect(jsonPath("$.errors[0].message").value("Formato de playerId no válido"));
     }
 }
