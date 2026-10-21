@@ -1,6 +1,7 @@
 package com.tetrio.analytics.config;
 
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotEmpty;
@@ -14,8 +15,33 @@ import org.springframework.validation.annotation.Validated;
 public record AppProperties(
         @NotNull @Valid CorsProperties cors,
         @NotNull @Valid TetraChannelProperties tetraChannel,
-        @NotNull @Valid CacheProperties cache
+        @NotNull @Valid CacheProperties cache,
+        @NotNull @Valid ExtractionProperties extraction
 ) {
+
+    public static AppProperties of(
+            CorsProperties cors,
+            TetraChannelProperties tetraChannel,
+            CacheProperties cache
+    ) {
+        return new AppProperties(
+                cors,
+                tetraChannel,
+                cache,
+                new ExtractionProperties(
+                        false,
+                        List.of("leaderboard_league"),
+                        100,
+                        0,
+                        3,
+                        5,
+                        "../data/raw",
+                        "../data/processed",
+                        "",
+                        ""
+                )
+        );
+    }
 
     public record CorsProperties(
             @NotEmpty List<@NotBlank String> allowedOrigins
@@ -31,5 +57,18 @@ public record AppProperties(
 
     public record CacheProperties(
             @Min(1) long ttlSeconds
+    ) {}
+
+    public record ExtractionProperties(
+            boolean enabled,
+            @NotEmpty List<@NotBlank String> phases,
+            @Min(1) @Max(100) int batchSize,
+            @Min(0) int maxPages,
+            @Min(0) int maxRetries,
+            @Min(1) int maxConsecutiveErrors,
+            @NotBlank String rawDir,
+            @NotBlank String processedDir,
+            String resumeRunId,
+            String datasetVersion
     ) {}
 }

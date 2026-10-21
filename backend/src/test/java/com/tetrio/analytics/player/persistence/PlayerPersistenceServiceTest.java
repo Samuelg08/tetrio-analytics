@@ -2,10 +2,13 @@ package com.tetrio.analytics.player.persistence;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
+import com.tetrio.analytics.common.PageResponse;
 import com.tetrio.analytics.player.dto.LeagueSummaryDto;
 import java.time.Instant;
 import java.util.List;
@@ -161,5 +164,32 @@ class PlayerPersistenceServiceTest {
                     .containsEntry("playerId", 1)
                     .containsEntry("capturedAt", -1);
         });
+    }
+
+    @Test
+    void queriesSnapshotsFilteredByDateRangeAndSortedAscending() {
+        Instant from = Instant.parse("2026-10-20T00:00:00Z");
+        Instant to = Instant.parse("2026-10-20T23:59:59Z");
+
+        when(mongoTemplate.count(any(Query.class), eq(SnapshotDocument.class))).thenReturn(25L);
+        when(mongoTemplate.find(any(Query.class), eq(SnapshotDocument.class))).thenReturn(List.of());
+
+        PageResponse<SnapshotDocument> page =
+                persistenceService.findSnapshotsByPlayerId(PLAYER_ID, from, to, 1, 10);
+
+        assertThat(page.page()).isEqualTo(1);
+        assertThat(page.size()).isEqualTo(10);
+        assertThat(page.totalItems()).isEqualTo(25L);
+        assertThat(page.totalPages()).isEqualTo(3);
+
+        ArgumentCaptor<Query> findQueryCaptor = ArgumentCaptor.forClass(Query.class);
+        verify(mongoTemplate).find(findQueryCaptor.capture(), eq(SnapshotDocument.class));
+
+        Query executed = findQueryCaptor.getValue();
+        assertThat(executed.getSkip()).isEqualTo(10L);
+        assertThat(executed.getLimit()).isEqualTo(10);
+        assertThat(executed.getSortObject().getInteger("capturedAt")).isEqualTo(1);
+        assertThat(executed.getQueryObject().getString("playerId")).isEqualTo(PLAYER_ID);
+        assertThat(executed.getQueryObject()).containsKey("capturedAt");
     }
 }

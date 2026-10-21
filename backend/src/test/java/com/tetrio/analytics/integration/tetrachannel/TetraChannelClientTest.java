@@ -11,6 +11,7 @@ import static org.springframework.test.web.client.response.MockRestResponseCreat
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.tetrio.analytics.config.AppProperties;
 import com.tetrio.analytics.integration.tetrachannel.dto.TetraChannelResponse;
+import com.tetrio.analytics.integration.tetrachannel.dto.TetraLeaderboardData;
 import com.tetrio.analytics.integration.tetrachannel.dto.TetraUserData;
 import com.tetrio.analytics.problem.ApiProblemException;
 import com.tetrio.analytics.problem.ErrorCode;
@@ -42,7 +43,7 @@ class TetraChannelClientTest {
         Clock fixedClock = Clock.fixed(Instant.parse("2026-10-20T18:00:00Z"), ZoneOffset.UTC);
         rateLimiter = new TetraChannelRateLimiter(0L, 3000L, fixedClock, ms -> {});
 
-        AppProperties props = new AppProperties(
+        AppProperties props = AppProperties.of(
                 new AppProperties.CorsProperties(List.of("http://localhost:5173")),
                 new AppProperties.TetraChannelProperties("https://ch.tetr.io/api", 5000L, 0L, 3000L, "test-agent/0.2"),
                 new AppProperties.CacheProperties(300L)
@@ -168,5 +169,44 @@ class TetraChannelClientTest {
                 .isInstanceOf(ApiProblemException.class)
                 .satisfies(ex -> assertThat(((ApiProblemException) ex).errorCode())
                         .isEqualTo(ErrorCode.UPSTREAM_UNAVAILABLE));
+    }
+
+    @Test
+    void fetchesLeagueLeaderboardPageWithPrisecterCursorAndPreservesRawJson() {
+        String body = """
+                {
+                  "success": true,
+                  "cache": { "status": "hit", "cached_at": 1792538893167, "cached_until": 1792539193167 },
+                  "data": {
+                    "entries": [
+                      {
+                        "_id": "5e9d4eec530bc13f9fdcd2c0",
+                        "username": "5han",
+                        "country": "JP",
+                        "league": {
+                          "gamesplayed": 1711,
+                          "gameswon": 1471,
+                          "tr": 24863.06,
+                          "rank": "x+"
+                        },
+                        "p": { "pri": 24863.06, "sec": 0, "ter": 0 }
+                      }
+                    ]
+                  }
+                }
+                """;
+
+        mockServer.expect(requestTo("https://ch.tetr.io/api/users/by/league?limit=100&after=24900:0:0"))
+                .andExpect(method(HttpMethod.GET))
+                .andExpect(header("X-Session-ID", "session-leaderboard"))
+                .andRespond(withSuccess(body, MediaType.APPLICATION_JSON));
+
+        TetraChannelResponse<TetraLeaderboardData> response =
+                client.fetchLeagueLeaderboardPage(100, "24900:0:0", "session-leaderboard");
+
+        mockServer.verify();
+        assertThat(response.rawJson()).contains("\"5han\"");
+        assertThat(response.data().entries()).hasSize(1);
+        assertThat(response.data().entries().getFirst().p().toCursorString()).isEqualTo("24863.06:0:0");
     }
 }

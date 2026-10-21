@@ -10,6 +10,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.tetrio.analytics.common.PageResponse;
 import com.tetrio.analytics.integration.tetrachannel.TetraChannelClient;
 import com.tetrio.analytics.integration.tetrachannel.dto.TetraChannelCache;
 import com.tetrio.analytics.integration.tetrachannel.dto.TetraChannelResponse;
@@ -18,6 +19,7 @@ import com.tetrio.analytics.integration.tetrachannel.dto.TetraUserData;
 import com.tetrio.analytics.player.dto.DataSource;
 import com.tetrio.analytics.player.dto.LeagueSummaryDto;
 import com.tetrio.analytics.player.dto.PlayerProfileResponse;
+import com.tetrio.analytics.player.dto.SnapshotItemDto;
 import com.tetrio.analytics.player.persistence.CacheWindowCalculator;
 import com.tetrio.analytics.player.persistence.PlayerDocument;
 import com.tetrio.analytics.player.persistence.PlayerPersistenceService;
@@ -27,6 +29,7 @@ import com.tetrio.analytics.problem.ErrorCode;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
+import java.util.List;
 import java.util.Optional;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -164,6 +167,33 @@ class PlayerServiceTest {
                     assertThat(problem.errors()).hasSize(1);
                     assertThat(problem.errors().getFirst().field()).isEqualTo("playerId");
                 });
+    }
+
+    @Test
+    void getsSnapshotsAndValidatesRangeAndPaginationParameters() {
+        PlayerDocument existingDoc = samplePlayerDocument(FIXED_NOW.minusSeconds(60), FIXED_NOW.plusSeconds(240));
+        when(persistenceService.findByExternalPlayerId(PLAYER_ID)).thenReturn(Optional.of(existingDoc));
+
+        SnapshotDocument snap = new SnapshotDocument(
+                "s1", PLAYER_ID, PLAYER_ID + ":1", FIXED_NOW, FIXED_NOW.plusSeconds(300), FIXED_NOW,
+                24863.06, 4662.16, 99.99, "x+",
+                new SnapshotDocument.SnapshotMetrics(170.6, 2.73, 353.52, 99.9993, 1711, 1471, 1, 0.0, "x+", true, false),
+                null, SnapshotDocument.CURRENT_SCHEMA_VERSION
+        );
+        when(persistenceService.findSnapshotsByPlayerId(PLAYER_ID, null, null, 0, 20))
+                .thenReturn(PageResponse.of(List.of(snap), 0, 20, 1L));
+
+        PageResponse<SnapshotItemDto> page = playerService.getSnapshots(PLAYER_ID, null, null, 0, 20);
+        assertThat(page.totalItems()).isEqualTo(1L);
+        assertThat(page.items().getFirst().tr()).isEqualTo(24863.06);
+
+        assertThatThrownBy(() -> playerService.getSnapshots(PLAYER_ID, "not-iso", null, 0, 20))
+                .isInstanceOf(ApiProblemException.class)
+                .satisfies(ex -> assertThat(((ApiProblemException) ex).errors().getFirst().field()).isEqualTo("from"));
+
+        assertThatThrownBy(() -> playerService.getSnapshots(PLAYER_ID, null, null, -1, 20))
+                .isInstanceOf(ApiProblemException.class)
+                .satisfies(ex -> assertThat(((ApiProblemException) ex).errors().getFirst().field()).isEqualTo("page"));
     }
 
     private static PlayerDocument samplePlayerDocument(Instant syncedAt, Instant validUntil) {

@@ -5,6 +5,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.tetrio.analytics.config.AppProperties;
 import com.tetrio.analytics.integration.tetrachannel.dto.TetraChannelEnvelope;
 import com.tetrio.analytics.integration.tetrachannel.dto.TetraChannelResponse;
+import com.tetrio.analytics.integration.tetrachannel.dto.TetraGeneralStatsData;
+import com.tetrio.analytics.integration.tetrachannel.dto.TetraLeaderboardData;
 import com.tetrio.analytics.integration.tetrachannel.dto.TetraLeagueSummaryData;
 import com.tetrio.analytics.integration.tetrachannel.dto.TetraUserData;
 import com.tetrio.analytics.problem.ApiProblemException;
@@ -26,6 +28,8 @@ public class TetraChannelClient {
 
     public static final String SESSION_HEADER = "X-Session-ID";
     private static final long DEFAULT_UPSTREAM_RETRY_AFTER_SECONDS = 10L;
+    private static final java.util.regex.Pattern PRISECTER_CURSOR_PATTERN =
+            java.util.regex.Pattern.compile("^[0-9.+-]+:[0-9.+-]+:[0-9.+-]+$");
 
     private final RestClient restClient;
     private final TetraChannelRateLimiter rateLimiter;
@@ -59,6 +63,39 @@ public class TetraChannelClient {
                 new TypeReference<TetraChannelEnvelope<TetraLeagueSummaryData>>() {},
                 sessionId,
                 username
+        );
+    }
+
+    public TetraChannelResponse<TetraLeaderboardData> fetchLeagueLeaderboardPage(
+            int limit,
+            String afterCursor,
+            String sessionId
+    ) {
+        if (afterCursor == null || afterCursor.isBlank()) {
+            return get(
+                    "/users/by/league?limit={limit}",
+                    new TypeReference<TetraChannelEnvelope<TetraLeaderboardData>>() {},
+                    sessionId,
+                    limit
+            );
+        }
+        String trimmedCursor = afterCursor.trim();
+        if (!PRISECTER_CURSOR_PATTERN.matcher(trimmedCursor).matches()) {
+            throw new IllegalArgumentException("Cursor prisecter con formato inválido: " + trimmedCursor);
+        }
+        return get(
+                "/users/by/league?limit={limit}&after=" + trimmedCursor,
+                new TypeReference<TetraChannelEnvelope<TetraLeaderboardData>>() {},
+                sessionId,
+                limit
+        );
+    }
+
+    public TetraChannelResponse<TetraGeneralStatsData> fetchGeneralStats(String sessionId) {
+        return get(
+                "/general/stats",
+                new TypeReference<TetraChannelEnvelope<TetraGeneralStatsData>>() {},
+                sessionId
         );
     }
 
@@ -146,7 +183,7 @@ public class TetraChannelClient {
                             );
                         }
 
-                        return new TetraChannelResponse<>(envelope.data(), envelope.cache());
+                        return new TetraChannelResponse<>(envelope.data(), envelope.cache(), rawBody);
                     });
         } catch (ApiProblemException ex) {
             throw ex;

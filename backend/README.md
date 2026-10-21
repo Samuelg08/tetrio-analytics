@@ -35,10 +35,28 @@ $env:RUN_LIVE_TETRA_TESTS="true"; ./mvnw.cmd -B -Dtest=PlayerLiveSmokeTest "-Dar
 ./mvnw.cmd spring-boot:run
 ```
 
-## Endpoints implementados (BE-001 + BE-002)
+### Ejecutar el pipeline CLI de extracción (Fase 1 `leaderboard_league`, perfil `extraction`)
+> **Importante:** el pipeline nunca se ejecuta al levantar el servidor web normal. Solo debe ejecutarse bajo la regla de operador único y con `SPRING_PROFILES_ACTIVE=extraction` + `EXTRACTION_ENABLED=true`.
+
+```powershell
+$env:SPRING_PROFILES_ACTIVE="extraction"
+$env:EXTRACTION_ENABLED="true"
+$env:EXTRACTION_MAX_PAGES="0" # 0 = ranking completo (~363 páginas); usar p. ej. 2 para prueba corta
+./mvnw.cmd spring-boot:run
+```
+Para reanudar una ejecución pausada:
+```powershell
+$env:SPRING_PROFILES_ACTIVE="extraction"
+$env:EXTRACTION_ENABLED="true"
+$env:EXTRACTION_RESUME_RUN_ID="<runId>"
+./mvnw.cmd spring-boot:run
+```
+
+## Endpoints implementados (BE-001 + BE-002 + BE-003)
 - `GET /api/health` — Estado del servicio (`200 OK` `{ "status": "UP" }`).
 - `GET /api/players/by-username/{username}` — Consulta de perfil y resumen de TETRA LEAGUE con normalización (`trim` + minúsculas), validación (`^[a-z0-9_-]{3,16}$`), caché local en MongoDB (`dataSource: "cache"` si `now < cacheValidUntil`), sincronización con TETRA CHANNEL (`dataSource: "live"`), degradación controlada (`dataSource: "stale"` si TETRA CHANNEL o el rate limiter rechazan la consulta pero existe copia local) y errores RFC 9457 `ProblemDetail` (`400`, `404`, `429`, `502`, `503`).
 - `GET /api/players/{playerId}` — Consulta equivalente por MongoID de 24 caracteres hexadecimales (`^[0-9a-f]{24}$`).
+- `GET /api/players/{playerId}/snapshots?from=&to=&page=&size=` — Historial paginado (`PageResponse<SnapshotItemDto>`) de snapshots del jugador en orden cronológico ascendente (`capturedAt ASC`).
 - `GET /v3/api-docs` y `GET /swagger-ui.html` — Especificación OpenAPI v0.2 generada por `springdoc-openapi`.
 
 ## Persistencia e índices (BE-002)

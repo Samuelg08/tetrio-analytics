@@ -6,6 +6,7 @@ import com.tetrio.analytics.integration.tetrachannel.dto.TetraUserData;
 import com.tetrio.analytics.player.dto.DataSource;
 import com.tetrio.analytics.player.dto.LeagueSummaryDto;
 import com.tetrio.analytics.player.dto.PlayerProfileResponse;
+import com.tetrio.analytics.player.dto.SnapshotItemDto;
 import com.tetrio.analytics.player.persistence.CacheWindowCalculator.EffectiveCacheWindow;
 import com.tetrio.analytics.player.persistence.PlayerDocument;
 import com.tetrio.analytics.player.persistence.SnapshotDocument;
@@ -53,6 +54,27 @@ public class PlayerMapper {
                 document.lastSyncedAt(),
                 dataSource,
                 document.league()
+        );
+    }
+
+    public SnapshotItemDto toSnapshotItem(SnapshotDocument doc) {
+        if (doc == null) {
+            throw new IllegalArgumentException("SnapshotDocument no puede ser nulo.");
+        }
+        SnapshotDocument.SnapshotMetrics metrics = doc.metrics();
+        return new SnapshotItemDto(
+                doc.capturedAt(),
+                doc.rating(),
+                doc.glicko(),
+                doc.rd(),
+                metrics != null ? metrics.gxe() : null,
+                doc.rank(),
+                metrics != null ? metrics.apm() : null,
+                metrics != null ? metrics.pps() : null,
+                metrics != null ? metrics.vs() : null,
+                metrics != null ? metrics.gamesPlayed() : 0,
+                metrics != null ? metrics.gamesWon() : 0,
+                metrics != null ? metrics.standing() : null
         );
     }
 
