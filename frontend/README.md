@@ -1,9 +1,35 @@
-# Frontend
+# Frontend — TETR.IO Competitive Analytics
 
-SvelteKit + TypeScript. El agente puede inicializar el proyecto aquí tras aprobación del plan.
+Frontend en SvelteKit + TypeScript. Consume exclusivamente la API pública de Spring Boot; no llama a MongoDB ni al servicio interno de IA.
 
-Requisitos:
-- Usar `PUBLIC_API_BASE_URL` para la URL pública del backend.
-- No conectar directamente con MongoDB ni FastAPI.
-- Mantener estados de carga, error, vacío y éxito.
-- Añadir pruebas para componentes/servicios importantes.
+## Requisitos
+
+- Node.js 22 LTS y npm.
+- Spring Boot en `http://localhost:8080` para consultar perfiles reales.
+
+## Configuración y ejecución local
+
+Desde `frontend/`:
+
+```powershell
+Copy-Item .env.example .env
+npm install
+npm run dev -- --host 127.0.0.1
+```
+
+Abre `http://localhost:5173`. `PUBLIC_API_BASE_URL` debe apuntar a la base `/api` de Spring Boot. La variable se expone al navegador y no debe contener secretos.
+
+## Flujo implementado (FE-001)
+
+- Buscar un jugador con `GET /api/players/by-username/{username}`.
+- Mostrar perfil, país, procedencia (`live`, `cache` o `stale`) y métricas disponibles de TETRA LEAGUE.
+- Representar como “Sin dato” los valores `null`; no se convierten en cero.
+- Manejar carga, jugador no encontrado, errores de servicio y perfil sin resumen de liga.
+- Usar “Ver perfil de demostración” cuando el backend no esté disponible para presentar la interfaz. El aviso identifica esos valores como sintéticos.
+
+## Comandos
+
+```powershell
+npm run check
+npm run build
+```
