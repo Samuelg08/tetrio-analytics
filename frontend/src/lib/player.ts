@@ -27,31 +27,59 @@ export interface PlayerProfile {
 	league: LeagueSummary | null;
 }
 
+export interface ApiProblemFieldError {
+	field?: string;
+	message?: string;
+}
+
 export interface ApiProblem {
 	title?: string;
 	detail?: string;
 	code?: string;
 	status?: number;
+	errors?: ApiProblemFieldError[];
 }
 
 export class PlayerApiError extends Error {
+	readonly code?: string;
+	readonly status?: number;
+	readonly errors?: ApiProblemFieldError[];
+
 	constructor(
 		message: string,
-		readonly code?: string,
-		readonly status?: number
+		code?: string,
+		status?: number,
+		errors?: ApiProblemFieldError[]
 	) {
 		super(message);
 		this.name = 'PlayerApiError';
+		this.code = code;
+		this.status = status;
+		this.errors = errors;
 	}
 }
 
-const apiBaseUrl = (value: string) => value.replace(/\/+$/, '');
+export const DEFAULT_API_BASE_URL = 'http://localhost:8080/api';
 
-export async function fetchPlayerProfile(username: string, baseUrl: string): Promise<PlayerProfile> {
+export const apiBaseUrl = (value?: string | null): string => {
+	const raw = value && value.trim().length > 0 ? value.trim() : DEFAULT_API_BASE_URL;
+	return raw.replace(/\/+$/, '');
+};
+
+export async function fetchPlayerProfile(
+	username: string,
+	baseUrl?: string | null
+): Promise<PlayerProfile> {
+	const cleanUsername = username.trim().toLowerCase();
+	if (!cleanUsername) {
+		throw new PlayerApiError('Debes ingresar un nombre de usuario.', 'EMPTY_USERNAME', 400);
+	}
+
+	const resolvedBase = apiBaseUrl(baseUrl);
 	let response: Response;
 	try {
 		response = await fetch(
-			`${apiBaseUrl(baseUrl)}/players/by-username/${encodeURIComponent(username.trim())}`,
+			`${resolvedBase}/players/by-username/${encodeURIComponent(cleanUsername)}`,
 			{ headers: { Accept: 'application/json' } }
 		);
 	} catch {
@@ -63,39 +91,17 @@ export async function fetchPlayerProfile(username: string, baseUrl: string): Pro
 		try {
 			problem = (await response.json()) as ApiProblem;
 		} catch {
-			// Algunas respuestas del proxy o del proveedor pueden no incluir ProblemDetail.
+			// Respuestas del proxy o del servidor que no incluyan ProblemDetail RFC 9457
 		}
 		throw new PlayerApiError(
 			problem.detail ?? 'Ocurrió un error al consultar el jugador.',
 			problem.code,
-			response.status
+			response.status,
+			problem.errors
 		);
 	}
 
 	return (await response.json()) as PlayerProfile;
 }
 
-export const demoProfile: PlayerProfile = {
-	playerId: '000000000000000000000000',
-	username: 'tetrio_demo',
-	country: 'CO',
-	lastSyncedAt: '2026-10-22T12:00:00Z',
-	dataSource: 'cache',
-	league: {
-		gamesPlayed: 842,
-		gamesWon: 476,
-		ranked: true,
-		tr: 18452,
-		glicko: 1968.42,
-		rd: 62.5,
-		gxe: 73.4,
-		rank: 'S+',
-		bestRank: 'S+',
-		apm: 52.1,
-		pps: 2.31,
-		vs: 118.7,
-		standing: 1248,
-		percentile: 0.08,
-		decaying: false
-	}
-};
+export { demoProfile, unrankedDemoProfile } from './fixtures/player.fixture';

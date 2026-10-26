@@ -30,12 +30,16 @@
 		{ label: 'Posición global', key: 'standing', format: (value: number) => `#${value.toLocaleString('es-CO')}` }
 	] as const;
 
-	function displayMetric(key: (typeof metrics)[number]['key']): string {
-		const value = profile?.league?.[key];
+	function displayMetric(metric: (typeof metrics)[number]): string {
+		const value = profile?.league?.[metric.key];
 		if (value === null || value === undefined || value === '') return 'Sin dato';
-		if (typeof value !== 'number') return value;
-		if (key === 'tr' || key === 'standing') return Math.round(value).toLocaleString('es-CO');
-		return value.toFixed(2);
+		if ('format' in metric && typeof metric.format === 'function') {
+			return (metric.format as (v: any) => string)(value);
+		}
+		if (typeof value === 'number') {
+			return value.toFixed(2);
+		}
+		return String(value);
 	}
 
 	function formatDate(date: string): string {
@@ -57,16 +61,25 @@
 		errorMessage = '';
 		isDemo = false;
 		try {
-			profile = await fetchPlayerProfile(query, PUBLIC_API_BASE_URL);
+			profile = await fetchPlayerProfile(query, PUBLIC_API_BASE_URL ?? undefined);
 		} catch (error) {
 			profile = null;
-			errorMessage = error instanceof PlayerApiError
-				? error.code === 'PLAYER_NOT_FOUND'
-					? 'No encontramos ese jugador. Revisa el nombre e inténtalo de nuevo.'
-					: error.code === 'RATE_LIMITED' || error.code === 'UPSTREAM_UNAVAILABLE'
-						? 'El servicio está temporalmente limitado. Espera un momento y vuelve a intentar.'
-						: error.message
-				: 'No se pudo completar la búsqueda. Inténtalo de nuevo.';
+			if (error instanceof PlayerApiError) {
+				if (error.code === 'PLAYER_NOT_FOUND') {
+					errorMessage = 'No encontramos ese jugador. Revisa el nombre e inténtalo de nuevo.';
+				} else if (error.code === 'RATE_LIMITED' || error.code === 'UPSTREAM_UNAVAILABLE') {
+					errorMessage = 'El servicio está temporalmente limitado. Espera un momento y vuelve a intentar.';
+				} else if (error.code === 'VALIDATION_FAILED') {
+					const fieldErrors = error.errors?.map((e) => e.message).filter(Boolean).join('. ');
+					errorMessage = fieldErrors
+						? `Parámetros inválidos: ${fieldErrors}`
+						: (error.message || 'El username debe tener entre 3 y 16 caracteres alfanuméricos.');
+				} else {
+					errorMessage = error.message;
+				}
+			} else {
+				errorMessage = 'No se pudo completar la búsqueda. Inténtalo de nuevo.';
+			}
 		} finally {
 			isLoading = false;
 		}
@@ -166,7 +179,7 @@
 					<div class="metric-grid">
 						{#each metrics as metric (metric.key)}
 			<article class="metric-card" class:featured={metric.key === 'tr' || metric.key === 'rank'}>
-								<p>{metric.label}</p><strong>{displayMetric(metric.key)}</strong>
+								<p>{metric.label}</p><strong>{displayMetric(metric)}</strong>
 							</article>
 						{/each}
 					</div>
@@ -183,6 +196,7 @@
 			<section class="empty-state" aria-label="Inicia una búsqueda">
 				<div class="empty-grid" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span></div>
 				<p>Tu próxima partida empieza con datos.</p>
+				<button type="button" class="text-button" onclick={loadDemo}>Probar con perfil de demostración</button>
 			</section>
 		{/if}
 	</main>

@@ -31,5 +31,6 @@ Abre `http://localhost:5173`. `PUBLIC_API_BASE_URL` debe apuntar a la base `/api
 
 ```powershell
 npm run check
+npm test -- --run
 npm run build
 ```
