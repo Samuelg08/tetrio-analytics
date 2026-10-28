@@ -1,6 +1,7 @@
 package com.tetrio.analytics.player.persistence;
 
 import com.tetrio.analytics.common.PageResponse;
+import com.tetrio.analytics.ranking.dto.RankingMetric;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
@@ -67,6 +68,75 @@ public class PlayerPersistenceService {
         List<SnapshotDocument> docs = mongoTemplate.find(pageQuery, SnapshotDocument.class);
         return PageResponse.of(docs, page, size, totalItems);
     }
+
+    public LocalRankingQueryResult queryLocalRanking(
+            RankingMetric metric,
+            String country,
+            int page,
+            int size
+    ) {
+        Query baseScopeQuery = country != null
+                ? Query.query(Criteria.where("country").is(country))
+                : new Query();
+        long totalPlayersInScope = mongoTemplate.count(baseScopeQuery, PlayerDocument.class);
+
+        Criteria includedCriteria = Criteria.where(metric.mongoField()).ne(null);
+        if (metric.requiresRanked()) {
+            includedCriteria = includedCriteria.and("league.ranked").is(true);
+        }
+        if (country != null) {
+            includedCriteria = includedCriteria.and("country").is(country);
+        }
+
+        Query countIncludedQuery = Query.query(includedCriteria);
+        long playersIncluded = mongoTemplate.count(countIncludedQuery, PlayerDocument.class);
+        long playersExcludedNullMetric = Math.max(0L, totalPlayersInScope - playersIncluded);
+
+        Instant dataAsOf = null;
+        if (totalPlayersInScope > 0L) {
+            Query latestSyncQuery = (country != null
+                    ? Query.query(Criteria.where("country").is(country))
+                    : new Query())
+                    .with(Sort.by(Sort.Direction.DESC, "lastSyncedAt"))
+                    .limit(1);
+            PlayerDocument latestSyncDoc = mongoTemplate.findOne(latestSyncQuery, PlayerDocument.class);
+            if (latestSyncDoc != null) {
+                dataAsOf = latestSyncDoc.lastSyncedAt();
+            }
+        }
+
+        if (playersIncluded <= 0L) {
+            return new LocalRankingQueryResult(
+                    PageResponse.of(List.of(), page, size, 0L),
+                    0L,
+                    playersExcludedNullMetric,
+                    dataAsOf
+            );
+        }
+
+        Query pageQuery = Query.query(includedCriteria)
+                .with(Sort.by(
+                        Sort.Order.desc(metric.mongoField()),
+                        Sort.Order.asc("externalPlayerId")
+                ))
+                .skip((long) page * size)
+                .limit(size);
+        List<PlayerDocument> pageDocs = mongoTemplate.find(pageQuery, PlayerDocument.class);
+
+        return new LocalRankingQueryResult(
+                PageResponse.of(pageDocs, page, size, playersIncluded),
+                playersIncluded,
+                playersExcludedNullMetric,
+                dataAsOf
+        );
+    }
+
+    public record LocalRankingQueryResult(
+            PageResponse<PlayerDocument> page,
+            long playersIncluded,
+            long playersExcludedNullMetric,
+            Instant dataAsOf
+    ) {}
 
     public void saveSyncedPlayerAndSnapshot(PlayerDocument player, SnapshotDocument snapshot) {
         validateForPersistence(player, snapshot);

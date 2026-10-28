@@ -42,6 +42,8 @@ class HealthControllerIntegrationTest {
                 .andExpect(jsonPath("$.paths['/api/health']").exists())
                 .andExpect(jsonPath("$.paths['/api/players/by-username/{username}']").exists())
                 .andExpect(jsonPath("$.paths['/api/players/{playerId}']").exists())
-                .andExpect(jsonPath("$.paths['/api/players/{playerId}/snapshots']").exists());
+                .andExpect(jsonPath("$.paths['/api/players/{playerId}/snapshots']").exists())
+                .andExpect(jsonPath("$.paths['/api/rankings/local']").exists())
+                .andExpect(jsonPath("$.paths['/api/comparisons']").exists());
     }
 }
