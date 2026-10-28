@@ -32,6 +32,9 @@ app:
     user-agent: tetrio-competitive-analytics-mvp/0.2
   cache:
     ttl-seconds: ${CACHE_TTL_SECONDS:300}
+  ai-service:
+    base-url: ${AI_SERVICE_URL:http://127.0.0.1:8000}
+    timeout-ms: ${AI_SERVICE_TIMEOUT_MS:3000}
   extraction:
     enabled: ${EXTRACTION_ENABLED:false}
     phases: ${EXTRACTION_PHASES:leaderboard_league}

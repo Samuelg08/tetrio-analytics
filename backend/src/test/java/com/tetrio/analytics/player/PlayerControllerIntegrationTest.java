@@ -2,8 +2,10 @@ package com.tetrio.analytics.player;
 
 import static org.hamcrest.Matchers.matchesPattern;
 import static org.hamcrest.Matchers.nullValue;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.options;
@@ -13,6 +15,11 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.tetrio.analytics.common.PageResponse;
+import com.tetrio.analytics.integration.aiservice.AiServiceClient;
+import com.tetrio.analytics.integration.aiservice.dto.AiModelCardResponse;
+import com.tetrio.analytics.integration.aiservice.dto.AiTrEstimateResponse;
+import com.tetrio.analytics.integration.aiservice.dto.AiTrEstimateResponse.AiFeatureContributionDto;
+import com.tetrio.analytics.integration.aiservice.dto.AiTrEstimateResponse.AiTrPredictionDto;
 import com.tetrio.analytics.integration.tetrachannel.TetraChannelClient;
 import com.tetrio.analytics.integration.tetrachannel.dto.TetraChannelCache;
 import com.tetrio.analytics.integration.tetrachannel.dto.TetraChannelResponse;
@@ -48,6 +55,9 @@ class PlayerControllerIntegrationTest {
 
     @MockitoBean
     private PlayerPersistenceService playerPersistenceService;
+
+    @MockitoBean
+    private AiServiceClient aiServiceClient;
 
     @Test
     void returnsLivePlayerProfileForNormalizedUsername() throws Exception {
@@ -425,5 +435,87 @@ class PlayerControllerIntegrationTest {
                 .andExpect(jsonPath("$.modes['blitz'].primaryValue").value(1015993.0))
                 .andExpect(jsonPath("$.modes['blitz'].tSpins").value(61))
                 .andExpect(jsonPath("$.modes['blitz'].countryRank").value(12));
+    }
+
+    @Test
+    void returnsTrEstimateWithShapExplanationAndHandlesModelUnavailableAndMissingFeatures() throws Exception {
+        String playerId = "5e9d4eec530bc13f9fdcd2c0";
+        Instant syncedAt = Instant.parse("2026-10-20T18:00:00Z");
+        PlayerDocument storedPlayer = new PlayerDocument(
+                "doc-1",
+                playerId,
+                "5han",
+                "5han",
+                "JP",
+                null,
+                new LeagueSummaryDto(1711, 1471, true, 24863.06, 4662.16, 99.99, 99.9993, "x+", "x+", 170.6, 2.73, 353.52, 1, 0.0, false),
+                syncedAt,
+                syncedAt,
+                syncedAt.plusSeconds(300),
+                playerId + ":1",
+                PlayerDocument.CURRENT_SCHEMA_VERSION
+        );
+        when(playerPersistenceService.findByExternalPlayerId(playerId)).thenReturn(Optional.of(storedPlayer));
+
+        AiTrEstimateResponse aiResp = new AiTrEstimateResponse(
+                "ok",
+                new AiTrPredictionDto(24750.5),
+                "tr-cross-ridge-baseline",
+                "0.2.0",
+                "tr-cross-v1",
+                List.of(
+                        new AiFeatureContributionDto("apm", -10.5),
+                        new AiFeatureContributionDto("vs", 1150.2)
+                ),
+                "shap"
+        );
+        when(aiServiceClient.estimateTr(any())).thenReturn(Optional.of(aiResp));
+        when(aiServiceClient.fetchModelCard(anyString())).thenReturn(Optional.of(
+                new AiModelCardResponse(
+                        "tr-cross-ridge-baseline",
+                        "0.2.0",
+                        "20261020-sample500",
+                        "tr-cross-v1",
+                        "2026-10-28T23:35:07Z",
+                        java.util.Map.of("mae", 185.12, "rmse", 225.01, "r2", 0.8757),
+                        "ready"
+                )
+        ));
+
+        mockMvc.perform(get("/api/players/" + playerId + "/tr-estimate"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("ok"))
+                .andExpect(jsonPath("$.playerId").value(playerId))
+                .andExpect(jsonPath("$.estimatedTr").value(24750.5))
+                .andExpect(jsonPath("$.observedTr").value(24863.06))
+                .andExpect(jsonPath("$.modelName").value("tr-cross-ridge-baseline"))
+                .andExpect(jsonPath("$.modelVersion").value("0.2.0"))
+                .andExpect(jsonPath("$.featureSchemaVersion").value("tr-cross-v1"))
+                .andExpect(jsonPath("$.featuresUsed.apm").value(170.6))
+                .andExpect(jsonPath("$.featuresUsed.tr").doesNotExist())
+                .andExpect(jsonPath("$.explanationMethod").value("shap"))
+                .andExpect(jsonPath("$.explanation[0].feature").value("apm"));
+
+        verify(playerPersistenceService).savePrediction(any());
+        verify(playerPersistenceService).upsertModelVersion(any());
+
+        // When model is unavailable in FastAPI -> 200 OK with status: model_unavailable
+        when(aiServiceClient.estimateTr(any())).thenReturn(Optional.empty());
+        mockMvc.perform(get("/api/players/" + playerId + "/tr-estimate"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("model_unavailable"))
+                .andExpect(jsonPath("$.estimatedTr").value(nullValue()));
+
+        // When player has missing required features -> 422 PREDICTION_NOT_APPLICABLE
+        PlayerDocument incompletePlayer = new PlayerDocument(
+                "doc-2", playerId, "newp", "newp", null, null,
+                new LeagueSummaryDto(0, 0, false, null, null, null, null, null, null, null, null, null, null, null, false),
+                syncedAt, syncedAt, syncedAt, "k2", 1
+        );
+        when(playerPersistenceService.findByExternalPlayerId(playerId)).thenReturn(Optional.of(incompletePlayer));
+
+        mockMvc.perform(get("/api/players/" + playerId + "/tr-estimate"))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.code").value("PREDICTION_NOT_APPLICABLE"));
     }
 }

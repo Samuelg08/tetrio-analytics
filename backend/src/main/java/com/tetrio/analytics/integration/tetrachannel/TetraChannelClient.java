@@ -16,6 +16,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.Locale;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatusCode;
 import org.springframework.http.MediaType;
@@ -38,7 +39,7 @@ public class TetraChannelClient {
     private final String userAgent;
 
     public TetraChannelClient(
-            RestClient.Builder tetraChannelRestClientBuilder,
+            @Qualifier("tetraChannelRestClientBuilder") RestClient.Builder tetraChannelRestClientBuilder,
             TetraChannelRateLimiter rateLimiter,
             ObjectMapper objectMapper,
             AppProperties properties

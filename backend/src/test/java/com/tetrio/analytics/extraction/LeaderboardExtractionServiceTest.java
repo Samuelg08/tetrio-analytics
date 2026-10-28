@@ -235,6 +235,7 @@ class LeaderboardExtractionServiceTest {
                 new AppProperties.CorsProperties(List.of("http://localhost:5173")),
                 new AppProperties.TetraChannelProperties("https://ch.tetr.io/api", 5000L, 1100L, 3000L, "test-agent"),
                 new AppProperties.CacheProperties(300L),
+                new AppProperties.AiServiceProperties("http://127.0.0.1:8000", 3000L),
                 new AppProperties.ExtractionProperties(
                         true,
                         List.of("leaderboard_league"),

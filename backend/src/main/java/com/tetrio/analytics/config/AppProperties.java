@@ -16,6 +16,7 @@ public record AppProperties(
         @NotNull @Valid CorsProperties cors,
         @NotNull @Valid TetraChannelProperties tetraChannel,
         @NotNull @Valid CacheProperties cache,
+        @NotNull @Valid AiServiceProperties aiService,
         @NotNull @Valid ExtractionProperties extraction
 ) {
 
@@ -28,6 +29,7 @@ public record AppProperties(
                 cors,
                 tetraChannel,
                 cache,
+                new AiServiceProperties("http://127.0.0.1:8000", 3000L),
                 new ExtractionProperties(
                         false,
                         List.of("leaderboard_league"),
@@ -57,6 +59,11 @@ public record AppProperties(
 
     public record CacheProperties(
             @Min(1) long ttlSeconds
+    ) {}
+
+    public record AiServiceProperties(
+            @NotBlank String baseUrl,
+            @Min(100) long timeoutMs
     ) {}
 
     public record ExtractionProperties(

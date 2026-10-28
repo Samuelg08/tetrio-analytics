@@ -224,6 +224,33 @@ public class PlayerPersistenceService {
         }
     }
 
+    public void savePrediction(PredictionDocument prediction) {
+        if (prediction == null || prediction.playerId() == null) {
+            return;
+        }
+        mongoTemplate.save(prediction);
+    }
+
+    public void upsertModelVersion(ModelVersionDocument modelVersion) {
+        if (modelVersion == null || modelVersion.modelName() == null || modelVersion.version() == null) {
+            return;
+        }
+        Query query = Query.query(
+                Criteria.where("modelName").is(modelVersion.modelName())
+                        .and("version").is(modelVersion.version())
+        );
+        Update update = new Update()
+                .set("modelName", modelVersion.modelName())
+                .set("version", modelVersion.version())
+                .set("trainedAt", modelVersion.trainedAt())
+                .set("datasetVersion", modelVersion.datasetVersion())
+                .set("featureSchemaVersion", modelVersion.featureSchemaVersion())
+                .set("metrics", modelVersion.metrics())
+                .set("artifactPath", modelVersion.artifactPath())
+                .set("status", modelVersion.status());
+        mongoTemplate.upsert(query, update, ModelVersionDocument.class);
+    }
+
     private static void validateForPersistence(PlayerDocument player, SnapshotDocument snapshot) {
         if (player == null
                 || player.externalPlayerId() == null
