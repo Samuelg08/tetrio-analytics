@@ -8,6 +8,7 @@ import com.tetrio.analytics.integration.tetrachannel.dto.TetraChannelResponse;
 import com.tetrio.analytics.integration.tetrachannel.dto.TetraGeneralStatsData;
 import com.tetrio.analytics.integration.tetrachannel.dto.TetraLeaderboardData;
 import com.tetrio.analytics.integration.tetrachannel.dto.TetraLeagueSummaryData;
+import com.tetrio.analytics.integration.tetrachannel.dto.TetraRecordSummaryData;
 import com.tetrio.analytics.integration.tetrachannel.dto.TetraUserData;
 import com.tetrio.analytics.problem.ApiProblemException;
 import com.tetrio.analytics.problem.ErrorCode;
@@ -63,6 +64,20 @@ public class TetraChannelClient {
                 new TypeReference<TetraChannelEnvelope<TetraLeagueSummaryData>>() {},
                 sessionId,
                 username
+        );
+    }
+
+    public TetraChannelResponse<TetraRecordSummaryData> fetchRecordSummary(
+            String userIdentifier,
+            String mode,
+            String sessionId
+    ) {
+        return get(
+                "/users/{userIdentifier}/summaries/{mode}",
+                new TypeReference<TetraChannelEnvelope<TetraRecordSummaryData>>() {},
+                sessionId,
+                userIdentifier,
+                mode
         );
     }
 

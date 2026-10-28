@@ -176,6 +176,54 @@ public class PlayerPersistenceService {
         mongoTemplate.upsert(snapshotQuery, snapshotUpdate, SnapshotDocument.class);
     }
 
+    public List<RecordDocument> findRecordsByPlayerId(String playerId) {
+        if (playerId == null || playerId.isBlank()) {
+            return List.of();
+        }
+        Query query = Query.query(Criteria.where("playerId").is(playerId));
+        return mongoTemplate.find(query, RecordDocument.class);
+    }
+
+    public void savePlayerRecords(List<RecordDocument> records) {
+        if (records == null || records.isEmpty()) {
+            return;
+        }
+        for (RecordDocument rec : records) {
+            if (rec == null || rec.playerId() == null || rec.mode() == null || rec.recordType() == null) {
+                continue;
+            }
+            Query query = Query.query(
+                    Criteria.where("playerId").is(rec.playerId())
+                            .and("mode").is(rec.mode())
+                            .and("recordType").is(rec.recordType())
+            );
+            Update update = new Update()
+                    .set("playerId", rec.playerId())
+                    .set("mode", rec.mode())
+                    .set("recordType", rec.recordType())
+                    .set("recordId", rec.recordId())
+                    .set("replayId", rec.replayId())
+                    .set("primaryMetric", rec.primaryMetric())
+                    .set("value", rec.value())
+                    .set("finalTimeMs", rec.finalTimeMs())
+                    .set("score", rec.score())
+                    .set("lines", rec.lines())
+                    .set("level", rec.level())
+                    .set("pps", rec.pps())
+                    .set("piecesPlaced", rec.piecesPlaced())
+                    .set("inputs", rec.inputs())
+                    .set("tSpins", rec.tSpins())
+                    .set("finesseFaults", rec.finesseFaults())
+                    .set("globalRank", rec.globalRank())
+                    .set("countryRank", rec.countryRank())
+                    .set("achievedAt", rec.achievedAt())
+                    .set("lastSyncedAt", rec.lastSyncedAt())
+                    .set("cacheValidUntil", rec.cacheValidUntil())
+                    .set("source", rec.source());
+            mongoTemplate.upsert(query, update, RecordDocument.class);
+        }
+    }
+
     private static void validateForPersistence(PlayerDocument player, SnapshotDocument snapshot) {
         if (player == null
                 || player.externalPlayerId() == null

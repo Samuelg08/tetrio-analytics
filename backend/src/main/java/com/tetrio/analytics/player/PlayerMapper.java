@@ -2,17 +2,28 @@ package com.tetrio.analytics.player;
 
 import com.tetrio.analytics.integration.tetrachannel.dto.TetraChannelCache;
 import com.tetrio.analytics.integration.tetrachannel.dto.TetraLeagueSummaryData;
+import com.tetrio.analytics.integration.tetrachannel.dto.TetraRecordSummaryData;
 import com.tetrio.analytics.integration.tetrachannel.dto.TetraUserData;
 import com.tetrio.analytics.player.dto.DataSource;
 import com.tetrio.analytics.player.dto.LeagueSummaryDto;
 import com.tetrio.analytics.player.dto.PlayerProfileResponse;
+import com.tetrio.analytics.player.dto.PlayerRecordsResponse.ModeRecordDto;
+import com.tetrio.analytics.player.dto.PlayerStatisticsResponse;
+import com.tetrio.analytics.player.dto.PlayerStatisticsResponse.DerivedStatisticsDto;
+import com.tetrio.analytics.player.dto.PlayerStatisticsResponse.MetricDefinitionDto;
+import com.tetrio.analytics.player.dto.PlayerStatisticsResponse.RawStatisticsDto;
 import com.tetrio.analytics.player.dto.SnapshotItemDto;
 import com.tetrio.analytics.player.persistence.CacheWindowCalculator.EffectiveCacheWindow;
 import com.tetrio.analytics.player.persistence.PlayerDocument;
+import com.tetrio.analytics.player.persistence.RecordDocument;
 import com.tetrio.analytics.player.persistence.SnapshotDocument;
 import com.tetrio.analytics.problem.ApiProblemException;
 import com.tetrio.analytics.problem.ErrorCode;
+import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.Instant;
+import java.time.format.DateTimeParseException;
+import java.util.List;
 import java.util.Locale;
 import java.util.regex.Pattern;
 import org.springframework.stereotype.Component;
@@ -190,6 +201,177 @@ public class PlayerMapper {
                 normalizeNonNegativeDouble(raw.percentile()),
                 Boolean.TRUE.equals(raw.decaying())
         );
+    }
+
+    public PlayerStatisticsResponse toPlayerStatistics(PlayerDocument doc) {
+        if (doc == null) {
+            throw new IllegalArgumentException("PlayerDocument no puede ser nulo.");
+        }
+        LeagueSummaryDto league = doc.league();
+        PlayerDocument.ProfileMetadata profile = doc.profile();
+
+        int gamesPlayed = league != null ? league.gamesPlayed() : 0;
+        int gamesWon = league != null ? league.gamesWon() : 0;
+        Double apm = league != null ? league.apm() : null;
+        Double pps = league != null ? league.pps() : null;
+        Double vs = league != null ? league.vs() : null;
+        Double xp = profile != null ? profile.xp() : null;
+        Double gametimeSeconds = profile != null ? profile.gametime() : null;
+
+        RawStatisticsDto raw = new RawStatisticsDto(
+                gamesPlayed,
+                gamesWon,
+                league != null ? league.tr() : null,
+                league != null ? league.glicko() : null,
+                league != null ? league.rd() : null,
+                league != null ? league.gxe() : null,
+                apm,
+                pps,
+                vs,
+                xp,
+                gametimeSeconds
+        );
+
+        Integer gamesLost = (league != null && gamesPlayed >= gamesWon) ? (gamesPlayed - gamesWon) : null;
+        Double winRate = (gamesPlayed > 0)
+                ? round(BigDecimal.valueOf(gamesWon).divide(BigDecimal.valueOf(gamesPlayed), 8, RoundingMode.HALF_UP), 4)
+                : null;
+        Double attackPerPiece = (apm != null && pps != null && pps > 0.0d)
+                ? round(BigDecimal.valueOf(apm).divide(BigDecimal.valueOf(pps).multiply(BigDecimal.valueOf(60)), 8, RoundingMode.HALF_UP), 4)
+                : null;
+        Double vsPerApm = (vs != null && apm != null && apm > 0.0d)
+                ? round(BigDecimal.valueOf(vs).divide(BigDecimal.valueOf(apm), 8, RoundingMode.HALF_UP), 4)
+                : null;
+        Double gametimeHours = (gametimeSeconds != null && gametimeSeconds >= 0.0d)
+                ? round(BigDecimal.valueOf(gametimeSeconds).divide(BigDecimal.valueOf(3600), 6, RoundingMode.HALF_UP), 2)
+                : null;
+
+        DerivedStatisticsDto derived = new DerivedStatisticsDto(
+                gamesLost,
+                winRate,
+                attackPerPiece,
+                vsPerApm,
+                gametimeHours
+        );
+
+        List<MetricDefinitionDto> definitions = List.of(
+                new MetricDefinitionDto("gamesLost", "gamesPlayed - gamesWon", "games", List.of("league.gamesPlayed", "league.gamesWon")),
+                new MetricDefinitionDto("winRate", "gamesWon / gamesPlayed (null si gamesPlayed == 0)", "ratio [0, 1]", List.of("league.gamesWon", "league.gamesPlayed")),
+                new MetricDefinitionDto("attackPerPiece", "apm / (pps * 60) (null si pps == null o pps <= 0)", "attack/piece", List.of("league.apm", "league.pps")),
+                new MetricDefinitionDto("vsPerApm", "vs / apm (null si apm == null o apm <= 0)", "ratio", List.of("league.vs", "league.apm")),
+                new MetricDefinitionDto("gametimeHours", "gametimeSeconds / 3600 (null si gametimeSeconds == null)", "hours", List.of("profile.gametime"))
+        );
+
+        return new PlayerStatisticsResponse(
+                doc.externalPlayerId(),
+                doc.usernameLower(),
+                doc.lastSyncedAt(),
+                raw,
+                derived,
+                definitions
+        );
+    }
+
+    public RecordDocument toRecordDocument(
+            String playerId,
+            String mode,
+            TetraRecordSummaryData summaryData,
+            TetraChannelCache cache,
+            Instant syncedAt,
+            Instant cacheValidUntil,
+            String sessionId
+    ) {
+        String primaryMetric = "40l".equals(mode) ? "finalTimeMs" : "score";
+        TetraRecordSummaryData.TetraRecordEntry entry = summaryData != null ? summaryData.record() : null;
+        TetraRecordSummaryData.TetraRecordResults results = entry != null ? entry.results() : null;
+        TetraRecordSummaryData.TetraRecordStats stats = results != null ? results.stats() : null;
+        TetraRecordSummaryData.TetraRecordAggregateStats agg = results != null ? results.aggregateStats() : null;
+        TetraRecordSummaryData.TetraRecordFinesse finesse = stats != null ? stats.finesse() : null;
+
+        Double finalTimeMs = stats != null ? normalizeNonNegativeDouble(stats.finalTime()) : null;
+        Long score = (stats != null && stats.score() != null && stats.score() >= 0L) ? stats.score() : null;
+        Double primaryValue = "40l".equals(mode)
+                ? finalTimeMs
+                : (score != null ? score.doubleValue() : null);
+
+        Instant achievedAt = null;
+        if (entry != null && entry.ts() != null && !entry.ts().isBlank()) {
+            try {
+                achievedAt = Instant.parse(entry.ts().trim());
+            } catch (DateTimeParseException ignored) {
+                achievedAt = null;
+            }
+        }
+
+        return new RecordDocument(
+                null,
+                playerId,
+                mode,
+                RecordDocument.RECORD_TYPE_PERSONAL_BEST,
+                entry != null ? entry.id() : null,
+                entry != null ? entry.replayId() : null,
+                primaryMetric,
+                primaryValue,
+                finalTimeMs,
+                score,
+                stats != null ? normalizeNonNegativeInteger(stats.lines()) : null,
+                stats != null ? normalizeNonNegativeInteger(stats.level()) : null,
+                agg != null ? normalizeNonNegativeDouble(agg.pps()) : null,
+                stats != null ? normalizeNonNegativeInteger(stats.piecesPlaced()) : null,
+                stats != null ? normalizeNonNegativeInteger(stats.inputs()) : null,
+                stats != null ? normalizeNonNegativeInteger(stats.tSpins()) : null,
+                finesse != null ? normalizeNonNegativeInteger(finesse.faults()) : null,
+                summaryData != null ? normalizePositiveInteger(summaryData.rank()) : null,
+                summaryData != null ? normalizePositiveInteger(summaryData.rankLocal()) : null,
+                achievedAt,
+                syncedAt,
+                cacheValidUntil,
+                new RecordDocument.RecordSource(
+                        cache != null ? cache.cachedAt() : null,
+                        cache != null ? cache.cachedUntil() : null,
+                        sessionId
+                )
+        );
+    }
+
+    public ModeRecordDto toModeRecordDto(RecordDocument doc) {
+        if (doc == null || doc.recordId() == null) {
+            return null;
+        }
+        Double kpp = (doc.inputs() != null && doc.piecesPlaced() != null && doc.piecesPlaced() > 0)
+                ? round(BigDecimal.valueOf(doc.inputs()).divide(BigDecimal.valueOf(doc.piecesPlaced()), 8, RoundingMode.HALF_UP), 4)
+                : null;
+        return new ModeRecordDto(
+                doc.mode(),
+                doc.recordId(),
+                doc.replayId(),
+                doc.primaryMetric(),
+                doc.value(),
+                doc.finalTimeMs(),
+                doc.score(),
+                doc.lines(),
+                doc.level(),
+                doc.pps(),
+                doc.piecesPlaced(),
+                doc.inputs(),
+                kpp,
+                doc.tSpins(),
+                doc.finesseFaults(),
+                doc.globalRank(),
+                doc.countryRank(),
+                doc.achievedAt()
+        );
+    }
+
+    private static Double round(BigDecimal val, int scale) {
+        return val.setScale(scale, RoundingMode.HALF_UP).doubleValue();
+    }
+
+    private static Integer normalizeNonNegativeInteger(Integer value) {
+        if (value == null || value < 0) {
+            return null;
+        }
+        return value;
     }
 
     private static void validateUserData(TetraUserData userData) {
