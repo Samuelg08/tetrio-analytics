@@ -34,6 +34,10 @@ def load_and_verify_dataset(processed_dir: Path, dataset_version: str) -> Loaded
     dataset_dir = (processed_dir / dataset_version).resolve()
     manifest_path = dataset_dir / "manifest.json"
     jsonl_path = dataset_dir / "players_league.jsonl"
+    if not jsonl_path.is_file():
+        season_jsonl_path = dataset_dir / "season_league.jsonl"
+        if season_jsonl_path.is_file():
+            jsonl_path = season_jsonl_path
 
     if not manifest_path.is_file():
         raise FileNotFoundError(
@@ -41,7 +45,7 @@ def load_and_verify_dataset(processed_dir: Path, dataset_version: str) -> Loaded
         )
     if not jsonl_path.is_file():
         raise FileNotFoundError(
-            f"No existe players_league.jsonl en '{dataset_dir}'."
+            f"No existe players_league.jsonl ni season_league.jsonl en '{dataset_dir}'."
         )
 
     with manifest_path.open("r", encoding="utf-8") as fh:

@@ -24,6 +24,17 @@ def _is_valid_non_negative_number(val: Any) -> bool:
     return math.isfinite(fval) and fval >= 0.0
 
 
+def _compute_regression_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> dict[str, float]:
+    mae = float(mean_absolute_error(y_true, y_pred))
+    rmse = float(math.sqrt(mean_squared_error(y_true, y_pred)))
+    r2 = float(r2_score(y_true, y_pred))
+    return {
+        "mae": round(mae, 4),
+        "rmse": round(rmse, 4),
+        "r2": round(r2, 4),
+    }
+
+
 def _evaluate_group_kfold(
     estimator: Any,
     X: np.ndarray,
@@ -39,14 +50,53 @@ def _evaluate_group_kfold(
         fold_model.fit(X[train_idx], y[train_idx])
         oof_preds[test_idx] = fold_model.predict(X[test_idx])
 
-    mae = float(mean_absolute_error(y, oof_preds))
-    rmse = float(math.sqrt(mean_squared_error(y, oof_preds)))
-    r2 = float(r2_score(y, oof_preds))
-    return {
-        "mae": round(mae, 4),
-        "rmse": round(rmse, 4),
-        "r2": round(r2, 4),
+    return _compute_regression_metrics(y, oof_preds)
+
+
+def _evaluate_out_of_season(
+    ridge_model: Any,
+    rf_model: Any,
+    processed_dir: Path,
+    season_dataset_version: str,
+    train_player_ids: set[str],
+) -> dict[str, Any]:
+    season_loaded = load_and_verify_dataset(processed_dir, season_dataset_version)
+    valid_rows: list[dict[str, Any]] = []
+    disjoint_rows: list[dict[str, Any]] = []
+
+    for row in season_loaded.records:
+        if not row.get("ranked", False) or not _is_valid_non_negative_number(row.get("tr")):
+            continue
+        if all(_is_valid_non_negative_number(row.get(col)) for col in REQUIRED_FEATURES):
+            valid_rows.append(row)
+            if str(row["playerId"]) not in train_player_ids:
+                disjoint_rows.append(row)
+
+    result: dict[str, Any] = {
+        "seasonDatasetVersion": season_loaded.dataset_version,
+        "seasonRunId": season_loaded.run_id,
+        "totalSeasonRecords": len(valid_rows),
+        "disjointPlayersCount": len(disjoint_rows),
+        "overlappingPlayersExcluded": len(valid_rows) - len(disjoint_rows),
     }
+
+    if len(valid_rows) >= 5:
+        X_all = np.array([[float(r[col]) for col in REQUIRED_FEATURES] for r in valid_rows], dtype=np.float64)
+        y_all = np.array([float(r["tr"]) for r in valid_rows], dtype=np.float64)
+        result["allSeasonPlayers"] = {
+            "tr-cross-ridge-baseline": _compute_regression_metrics(y_all, ridge_model.predict(X_all)),
+            "tr-cross-rf-v1": _compute_regression_metrics(y_all, rf_model.predict(X_all)),
+        }
+
+    if len(disjoint_rows) >= 5:
+        X_disj = np.array([[float(r[col]) for col in REQUIRED_FEATURES] for r in disjoint_rows], dtype=np.float64)
+        y_disj = np.array([float(r["tr"]) for r in disjoint_rows], dtype=np.float64)
+        result["disjointPlayersOnly"] = {
+            "tr-cross-ridge-baseline": _compute_regression_metrics(y_disj, ridge_model.predict(X_disj)),
+            "tr-cross-rf-v1": _compute_regression_metrics(y_disj, rf_model.predict(X_disj)),
+        }
+
+    return result
 
 
 def train_and_evaluate(
@@ -54,6 +104,7 @@ def train_and_evaluate(
     dataset_version: str,
     output_dir: Path,
     model_version: str = "0.2.0",
+    season_test_dataset_version: str | None = None,
 ) -> dict[str, Any]:
     """Trains and evaluates the TR cross-regression model without data leakage or zero-imputation."""
     loaded = load_and_verify_dataset(processed_dir, dataset_version)
@@ -99,8 +150,19 @@ def train_and_evaluate(
     rf_metrics = _evaluate_group_kfold(rf_candidate, X, y, groups, n_splits=n_splits)
 
     ridge_pipeline.fit(X, y)
+    rf_candidate.fit(X, y)
     scaler: StandardScaler = ridge_pipeline.named_steps["scaler"]
     ridge: Ridge = ridge_pipeline.named_steps["ridge"]
+
+    out_of_season_eval: dict[str, Any] | None = None
+    if season_test_dataset_version:
+        out_of_season_eval = _evaluate_out_of_season(
+            ridge_model=ridge_pipeline,
+            rf_model=rf_candidate,
+            processed_dir=processed_dir,
+            season_dataset_version=season_test_dataset_version,
+            train_player_ids=set(groups),
+        )
 
     feature_means = {
         col: round(float(scaler.mean_[idx]), 6)
@@ -140,7 +202,12 @@ def train_and_evaluate(
         },
         "evaluationStrategy": {
             "method": f"GroupKFold(n_splits={n_splits}) partitioned by playerId",
-            "temporalValidationNote": "Dataset transversal de una única ventana de extracción; partición estricta por playerId sin fuga de datos.",
+            "temporalValidationNote": (
+                "Partición estricta por playerId y validación inter-temporada contra Season 1."
+                if out_of_season_eval is not None
+                else "Dataset transversal de una única ventana de extracción; partición estricta por playerId sin fuga de datos."
+            ),
+            "outOfSeasonEvaluation": out_of_season_eval,
         },
         "explanationSummary": {
             "method": "shap",
@@ -185,12 +252,19 @@ def main() -> None:
         default=Path("artifacts"),
         help="Directorio de salida para model.joblib y model_card.json.",
     )
+    parser.add_argument(
+        "--season-test-dataset-version",
+        type=str,
+        default=None,
+        help="Versión opcional de dataset histórico de temporada para validación inter-temporada.",
+    )
     args = parser.parse_args()
 
     card = train_and_evaluate(
         processed_dir=args.processed_dir,
         dataset_version=args.dataset_version,
         output_dir=args.output_dir,
+        season_test_dataset_version=args.season_test_dataset_version,
     )
     print(json.dumps(card, indent=2, ensure_ascii=False))
 
