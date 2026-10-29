@@ -39,6 +39,18 @@ public class PlayerPersistenceService {
         return Optional.ofNullable(mongoTemplate.findOne(query, PlayerDocument.class));
     }
 
+    public List<String> findAllExternalPlayerIds(int limit) {
+        Query query = new Query().with(Sort.by(Sort.Direction.ASC, "externalPlayerId"));
+        if (limit > 0) {
+            query.limit(limit);
+        }
+        query.fields().include("externalPlayerId");
+        return mongoTemplate.find(query, PlayerDocument.class).stream()
+                .map(PlayerDocument::externalPlayerId)
+                .filter(id -> id != null && !id.isBlank())
+                .toList();
+    }
+
     public PageResponse<SnapshotDocument> findSnapshotsByPlayerId(
             String playerId,
             Instant from,

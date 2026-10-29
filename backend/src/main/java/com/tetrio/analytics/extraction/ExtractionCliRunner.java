@@ -32,18 +32,33 @@ public class ExtractionCliRunner implements ApplicationRunner {
         if (properties.extraction().phases().contains(LeaderboardExtractionService.PHASE_LEADERBOARD_LEAGUE)) {
             log.info("Iniciando extracción CLI de Fase 1 ({})", LeaderboardExtractionService.PHASE_LEADERBOARD_LEAGUE);
             ExtractionCheckpoint result = extractionService.runPhase1Leaderboard();
-            log.info(
-                    "Extracción finalizada con estado='{}', runId='{}', páginas={}, jugadoresÚnicos={}",
-                    result.status(),
-                    result.runId(),
-                    result.pagesCompleted(),
-                    result.counters().uniquePlayers()
+            verifyCompleted(result);
+        }
+        if (properties.extraction().phases().contains(LeaderboardExtractionService.PHASE_PLAYER_ENRICHMENT)) {
+            log.info("Iniciando extracción CLI de Fase 2 ({})", LeaderboardExtractionService.PHASE_PLAYER_ENRICHMENT);
+            ExtractionCheckpoint result = extractionService.runPhase2PlayerEnrichment();
+            verifyCompleted(result);
+        }
+        if (properties.extraction().phases().contains(LeaderboardExtractionService.PHASE_SEASON_HISTORY)) {
+            log.info("Iniciando extracción CLI de Fase 3 ({})", LeaderboardExtractionService.PHASE_SEASON_HISTORY);
+            ExtractionCheckpoint result = extractionService.runPhase3SeasonHistory();
+            verifyCompleted(result);
+        }
+    }
+
+    private void verifyCompleted(ExtractionCheckpoint result) {
+        log.info(
+                "Extracción de fase '{}' finalizada con estado='{}', runId='{}', páginas/lotes={}, jugadoresÚnicos={}",
+                result.phase(),
+                result.status(),
+                result.runId(),
+                result.pagesCompleted(),
+                result.counters().uniquePlayers()
+        );
+        if (!"completed".equals(result.status())) {
+            throw new IllegalStateException(
+                    "El pipeline se detuvo en estado '" + result.status() + "' para runId=" + result.runId()
             );
-            if (!"completed".equals(result.status())) {
-                throw new IllegalStateException(
-                        "El pipeline se detuvo en estado '" + result.status() + "' para runId=" + result.runId()
-                );
-            }
         }
     }
 }

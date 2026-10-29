@@ -9,6 +9,7 @@ import com.tetrio.analytics.integration.tetrachannel.dto.TetraGeneralStatsData;
 import com.tetrio.analytics.integration.tetrachannel.dto.TetraLeaderboardData;
 import com.tetrio.analytics.integration.tetrachannel.dto.TetraLeagueSummaryData;
 import com.tetrio.analytics.integration.tetrachannel.dto.TetraRecordSummaryData;
+import com.tetrio.analytics.integration.tetrachannel.dto.TetraSeasonHistoryData;
 import com.tetrio.analytics.integration.tetrachannel.dto.TetraUserData;
 import com.tetrio.analytics.problem.ApiProblemException;
 import com.tetrio.analytics.problem.ErrorCode;
@@ -103,6 +104,38 @@ public class TetraChannelClient {
                 "/users/by/league?limit={limit}&after=" + trimmedCursor,
                 new TypeReference<TetraChannelEnvelope<TetraLeaderboardData>>() {},
                 sessionId,
+                limit
+        );
+    }
+
+    public TetraChannelResponse<TetraSeasonHistoryData> fetchSeasonLeaderboardPage(
+            String season,
+            int limit,
+            String afterCursor,
+            String sessionId
+    ) {
+        if (season == null || season.isBlank()) {
+            throw new IllegalArgumentException("El parámetro season no puede ser vacío.");
+        }
+        String trimmedSeason = season.trim();
+        if (afterCursor == null || afterCursor.isBlank()) {
+            return get(
+                    "/users/history/league/{season}?limit={limit}",
+                    new TypeReference<TetraChannelEnvelope<TetraSeasonHistoryData>>() {},
+                    sessionId,
+                    trimmedSeason,
+                    limit
+            );
+        }
+        String trimmedCursor = afterCursor.trim();
+        if (!PRISECTER_CURSOR_PATTERN.matcher(trimmedCursor).matches()) {
+            throw new IllegalArgumentException("Cursor prisecter con formato inválido: " + trimmedCursor);
+        }
+        return get(
+                "/users/history/league/{season}?limit={limit}&after=" + trimmedCursor,
+                new TypeReference<TetraChannelEnvelope<TetraSeasonHistoryData>>() {},
+                sessionId,
+                trimmedSeason,
                 limit
         );
     }
