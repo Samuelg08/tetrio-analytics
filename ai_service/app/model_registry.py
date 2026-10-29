@@ -57,7 +57,25 @@ class ModelRegistry:
             [[float(features[col]) for col in REQUIRED_FEATURES]],
             dtype=np.float64,
         )
-        raw_pred = float(self._model.predict(feature_vector)[0])
+        raw_pred = round(float(self._model.predict(feature_vector)[0]), 2)
+
+        explanation: list[FeatureContribution] = []
+        explanation_method: str | None = None
+        exp_summary = getattr(self._model_card, "explanationSummary", None)
+        if isinstance(exp_summary, dict) and exp_summary.get("method") == "shap":
+            means = exp_summary.get("featureMeans", {})
+            stds = exp_summary.get("featureStds", {})
+            weights = exp_summary.get("linearWeights", {})
+            if isinstance(means, dict) and isinstance(stds, dict) and isinstance(weights, dict):
+                for col in REQUIRED_FEATURES:
+                    val = float(features[col])
+                    mean_val = float(means.get(col, 0.0))
+                    std_val = float(stds.get(col, 1.0))
+                    weight_val = float(weights.get(col, 0.0))
+                    z = (val - mean_val) / std_val if std_val > 0.0 else 0.0
+                    contrib = round(weight_val * z, 4)
+                    explanation.append(FeatureContribution(feature=col, contribution=contrib))
+                explanation_method = "shap"
 
         return TrEstimateResponse(
             status="ok",
@@ -65,6 +83,6 @@ class ModelRegistry:
             modelName=self._model_card.modelName,
             modelVersion=self._model_card.modelVersion,
             featureSchemaVersion=self._model_card.featureSchemaVersion,
-            explanation=[],
-            explanationMethod=None,
+            explanation=explanation,
+            explanationMethod=explanation_method,
         )

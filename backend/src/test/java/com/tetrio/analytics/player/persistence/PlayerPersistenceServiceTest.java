@@ -10,6 +10,8 @@ import static org.mockito.Mockito.when;
 
 import com.tetrio.analytics.common.PageResponse;
 import com.tetrio.analytics.player.dto.LeagueSummaryDto;
+import com.tetrio.analytics.player.persistence.PlayerPersistenceService.LocalRankingQueryResult;
+import com.tetrio.analytics.ranking.dto.RankingMetric;
 import java.time.Instant;
 import java.util.List;
 import java.util.stream.StreamSupport;
@@ -191,5 +193,43 @@ class PlayerPersistenceServiceTest {
         assertThat(executed.getSortObject().getInteger("capturedAt")).isEqualTo(1);
         assertThat(executed.getQueryObject().getString("playerId")).isEqualTo(PLAYER_ID);
         assertThat(executed.getQueryObject()).containsKey("capturedAt");
+    }
+
+    @Test
+    void queriesLocalRankingWithMetricFilterRankedFlagAndDescendingSort() {
+        Instant syncedAt = Instant.parse("2026-10-20T12:00:00Z");
+        PlayerDocument latestPlayer = new PlayerDocument(
+                "doc-1", PLAYER_ID, "5han", "5han", "JP", null, null, syncedAt, syncedAt, syncedAt, WINDOW_KEY, 1
+        );
+
+        when(mongoTemplate.count(any(Query.class), eq(PlayerDocument.class)))
+                .thenReturn(15L)
+                .thenReturn(12L);
+        when(mongoTemplate.findOne(any(Query.class), eq(PlayerDocument.class)))
+                .thenReturn(latestPlayer);
+        when(mongoTemplate.find(any(Query.class), eq(PlayerDocument.class)))
+                .thenReturn(List.of(latestPlayer));
+
+        LocalRankingQueryResult result = persistenceService.queryLocalRanking(
+                RankingMetric.TR,
+                "JP",
+                0,
+                10
+        );
+
+        assertThat(result.playersIncluded()).isEqualTo(12L);
+        assertThat(result.playersExcludedNullMetric()).isEqualTo(3L);
+        assertThat(result.dataAsOf()).isEqualTo(syncedAt);
+        assertThat(result.page().items()).hasSize(1);
+
+        ArgumentCaptor<Query> findQueryCaptor = ArgumentCaptor.forClass(Query.class);
+        verify(mongoTemplate).find(findQueryCaptor.capture(), eq(PlayerDocument.class));
+
+        Query executed = findQueryCaptor.getValue();
+        assertThat(executed.getQueryObject().getString("country")).isEqualTo("JP");
+        assertThat(executed.getQueryObject().getBoolean("league.ranked")).isTrue();
+        assertThat(executed.getQueryObject()).containsKey("league.tr");
+        assertThat(executed.getSortObject().getInteger("league.tr")).isEqualTo(-1);
+        assertThat(executed.getSortObject().getInteger("externalPlayerId")).isEqualTo(1);
     }
 }

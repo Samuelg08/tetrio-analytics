@@ -4,22 +4,29 @@ import com.tetrio.analytics.common.PageResponse;
 import com.tetrio.analytics.integration.tetrachannel.TetraChannelClient;
 import com.tetrio.analytics.integration.tetrachannel.dto.TetraChannelResponse;
 import com.tetrio.analytics.integration.tetrachannel.dto.TetraLeagueSummaryData;
+import com.tetrio.analytics.integration.tetrachannel.dto.TetraRecordSummaryData;
 import com.tetrio.analytics.integration.tetrachannel.dto.TetraUserData;
 import com.tetrio.analytics.player.dto.DataSource;
 import com.tetrio.analytics.player.dto.PlayerProfileResponse;
+import com.tetrio.analytics.player.dto.PlayerRecordsResponse;
+import com.tetrio.analytics.player.dto.PlayerRecordsResponse.ModeRecordDto;
+import com.tetrio.analytics.player.dto.PlayerStatisticsResponse;
 import com.tetrio.analytics.player.dto.SnapshotItemDto;
 import com.tetrio.analytics.player.persistence.CacheWindowCalculator;
 import com.tetrio.analytics.player.persistence.CacheWindowCalculator.EffectiveCacheWindow;
 import com.tetrio.analytics.player.persistence.PlayerDocument;
 import com.tetrio.analytics.player.persistence.PlayerPersistenceService;
+import com.tetrio.analytics.player.persistence.RecordDocument;
 import com.tetrio.analytics.player.persistence.SnapshotDocument;
 import com.tetrio.analytics.problem.ApiProblemException;
 import com.tetrio.analytics.problem.ErrorCode;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.format.DateTimeParseException;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.regex.Pattern;
@@ -126,6 +133,130 @@ public class PlayerService {
                 rawPage.totalItems(),
                 rawPage.totalPages()
         );
+    }
+
+    public PlayerStatisticsResponse getStatistics(String rawPlayerId) {
+        String normalizedPlayerId = normalizeAndValidatePlayerId(rawPlayerId);
+        PlayerDocument existing = findByPlayerIdSafe(normalizedPlayerId);
+        if (existing == null) {
+            throw new ApiProblemException(
+                    ErrorCode.PLAYER_NOT_FOUND,
+                    "El jugador solicitado no está almacenado en la base de datos local."
+            );
+        }
+        return playerMapper.toPlayerStatistics(existing);
+    }
+
+    public PlayerRecordsResponse getRecords(String rawPlayerId) {
+        String normalizedPlayerId = normalizeAndValidatePlayerId(rawPlayerId);
+        Instant now = Instant.now(clock);
+
+        List<RecordDocument> storedRecords = findRecordsByPlayerIdSafe(normalizedPlayerId);
+        RecordDocument stored40l = findModeRecord(storedRecords, "40l");
+        RecordDocument storedBlitz = findModeRecord(storedRecords, "blitz");
+
+        if (isRecordCacheValid(stored40l, now) && isRecordCacheValid(storedBlitz, now)) {
+            return buildPlayerRecordsResponse(normalizedPlayerId, stored40l, storedBlitz, DataSource.CACHE);
+        }
+
+        String sessionId = "records-" + UUID.randomUUID();
+        final TetraChannelResponse<TetraRecordSummaryData> resp40l;
+        final TetraChannelResponse<TetraRecordSummaryData> respBlitz;
+
+        try {
+            resp40l = tetraChannelClient.fetchRecordSummary(normalizedPlayerId, "40l", sessionId);
+            respBlitz = tetraChannelClient.fetchRecordSummary(normalizedPlayerId, "blitz", sessionId);
+        } catch (ApiProblemException ex) {
+            if (stored40l != null && storedBlitz != null && isStaleFallbackEligible(ex.errorCode())) {
+                log.warn(
+                        "Fallo o límite al consultar récords de TETRA CHANNEL para '{}' ({}); sirviendo copia local stale.",
+                        normalizedPlayerId,
+                        ex.errorCode()
+                );
+                return buildPlayerRecordsResponse(normalizedPlayerId, stored40l, storedBlitz, DataSource.STALE);
+            }
+            throw ex;
+        }
+
+        Instant syncedAt = Instant.now(clock);
+        EffectiveCacheWindow cacheWindow = cacheWindowCalculator.computeWindow(
+                normalizedPlayerId,
+                resp40l.cache(),
+                respBlitz.cache(),
+                syncedAt,
+                null
+        );
+
+        RecordDocument new40l = playerMapper.toRecordDocument(
+                normalizedPlayerId,
+                "40l",
+                resp40l.data(),
+                resp40l.cache(),
+                syncedAt,
+                cacheWindow.windowUntilAt(),
+                sessionId
+        );
+        RecordDocument newBlitz = playerMapper.toRecordDocument(
+                normalizedPlayerId,
+                "blitz",
+                respBlitz.data(),
+                respBlitz.cache(),
+                syncedAt,
+                cacheWindow.windowUntilAt(),
+                sessionId
+        );
+
+        saveRecordsSafe(List.of(new40l, newBlitz));
+        return buildPlayerRecordsResponse(normalizedPlayerId, new40l, newBlitz, DataSource.LIVE);
+    }
+
+    private PlayerRecordsResponse buildPlayerRecordsResponse(
+            String playerId,
+            RecordDocument doc40l,
+            RecordDocument docBlitz,
+            DataSource dataSource
+    ) {
+        Instant syncedAt = doc40l != null ? doc40l.lastSyncedAt() : (docBlitz != null ? docBlitz.lastSyncedAt() : Instant.now(clock));
+        Map<String, ModeRecordDto> modes = new LinkedHashMap<>();
+        modes.put("40l", playerMapper.toModeRecordDto(doc40l));
+        modes.put("blitz", playerMapper.toModeRecordDto(docBlitz));
+        return new PlayerRecordsResponse(playerId, syncedAt, dataSource, modes);
+    }
+
+    private static RecordDocument findModeRecord(List<RecordDocument> records, String mode) {
+        if (records == null) {
+            return null;
+        }
+        for (RecordDocument rec : records) {
+            if (rec != null && mode.equals(rec.mode())) {
+                return rec;
+            }
+        }
+        return null;
+    }
+
+    private static boolean isRecordCacheValid(RecordDocument doc, Instant now) {
+        return doc != null
+                && doc.cacheValidUntil() != null
+                && now.isBefore(doc.cacheValidUntil());
+    }
+
+    private List<RecordDocument> findRecordsByPlayerIdSafe(String playerId) {
+        try {
+            List<RecordDocument> found = playerPersistenceService.findRecordsByPlayerId(playerId);
+            return found != null ? found : List.of();
+        } catch (DataAccessException ex) {
+            log.warn("No se pudo consultar récords en MongoDB para '{}': {}", playerId, ex.getMessage());
+            return List.of();
+        }
+    }
+
+    private void saveRecordsSafe(List<RecordDocument> records) {
+        try {
+            playerPersistenceService.savePlayerRecords(records);
+        } catch (DataAccessException ex) {
+            log.warn("No se pudo persistir récords en MongoDB: {}", ex.getMessage());
+        }
     }
 
     private static Instant parseOptionalInstant(String fieldName, String rawValue) {

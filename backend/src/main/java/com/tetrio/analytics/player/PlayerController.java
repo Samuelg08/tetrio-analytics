@@ -2,7 +2,10 @@ package com.tetrio.analytics.player;
 
 import com.tetrio.analytics.common.PageResponse;
 import com.tetrio.analytics.player.dto.PlayerProfileResponse;
+import com.tetrio.analytics.player.dto.PlayerRecordsResponse;
+import com.tetrio.analytics.player.dto.PlayerStatisticsResponse;
 import com.tetrio.analytics.player.dto.SnapshotItemDto;
+import com.tetrio.analytics.player.dto.TrEstimatePublicResponse;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.media.Content;
 import io.swagger.v3.oas.annotations.media.Schema;
@@ -23,9 +26,11 @@ import org.springframework.web.bind.annotation.RestController;
 public class PlayerController {
 
     private final PlayerService playerService;
+    private final TrEstimateService trEstimateService;
 
-    public PlayerController(PlayerService playerService) {
+    public PlayerController(PlayerService playerService, TrEstimateService trEstimateService) {
         this.playerService = playerService;
+        this.trEstimateService = trEstimateService;
     }
 
     @GetMapping(value = "/by-username/{username}", produces = MediaType.APPLICATION_JSON_VALUE)
@@ -164,5 +169,129 @@ public class PlayerController {
             @RequestParam(name = "size", defaultValue = "20") int size
     ) {
         return playerService.getSnapshots(playerId, from, to, page, size);
+    }
+
+    @GetMapping(value = "/{playerId}/statistics", produces = MediaType.APPLICATION_JSON_VALUE)
+    @Operation(
+            summary = "Obtiene estadísticas observadas y métricas derivadas de un jugador almacenado",
+            description = "Calcula en el backend métricas derivadas documentadas (winRate, gamesLost, attackPerPiece, vsPerApm, gametimeHours) con propagación segura de null."
+    )
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "Estadísticas y definiciones obtenidas correctamente"),
+            @ApiResponse(
+                    responseCode = "400",
+                    description = "playerId con formato no válido (VALIDATION_FAILED)",
+                    content = @Content(
+                            mediaType = MediaType.APPLICATION_PROBLEM_JSON_VALUE,
+                            schema = @Schema(implementation = ProblemDetail.class)
+                    )
+            ),
+            @ApiResponse(
+                    responseCode = "404",
+                    description = "Jugador no almacenado en la base de datos local (PLAYER_NOT_FOUND)",
+                    content = @Content(
+                            mediaType = MediaType.APPLICATION_PROBLEM_JSON_VALUE,
+                            schema = @Schema(implementation = ProblemDetail.class)
+                    )
+            )
+    })
+    public PlayerStatisticsResponse getStatistics(@PathVariable("playerId") String playerId) {
+        return playerService.getStatistics(playerId);
+    }
+
+    @GetMapping(value = "/{playerId}/records", produces = MediaType.APPLICATION_JSON_VALUE)
+    @Operation(
+            summary = "Obtiene los récords personales por modo (40l y blitz) de un jugador",
+            description = "Consulta la colección local 'records' dentro de la ventana de caché efectiva o sincroniza /users/:user/summaries/40l y /summaries/blitz desde TETRA CHANNEL."
+    )
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "Récords personales obtenidos correctamente"),
+            @ApiResponse(
+                    responseCode = "400",
+                    description = "playerId con formato no válido (VALIDATION_FAILED)",
+                    content = @Content(
+                            mediaType = MediaType.APPLICATION_PROBLEM_JSON_VALUE,
+                            schema = @Schema(implementation = ProblemDetail.class)
+                    )
+            ),
+            @ApiResponse(
+                    responseCode = "404",
+                    description = "Jugador inexistente en TETRA CHANNEL (PLAYER_NOT_FOUND)",
+                    content = @Content(
+                            mediaType = MediaType.APPLICATION_PROBLEM_JSON_VALUE,
+                            schema = @Schema(implementation = ProblemDetail.class)
+                    )
+            ),
+            @ApiResponse(
+                    responseCode = "429",
+                    description = "Presupuesto local de solicitudes agotado (RATE_LIMITED)",
+                    content = @Content(
+                            mediaType = MediaType.APPLICATION_PROBLEM_JSON_VALUE,
+                            schema = @Schema(implementation = ProblemDetail.class)
+                    )
+            ),
+            @ApiResponse(
+                    responseCode = "502",
+                    description = "Respuesta inválida o error interno de TETRA CHANNEL (UPSTREAM_BAD_RESPONSE)",
+                    content = @Content(
+                            mediaType = MediaType.APPLICATION_PROBLEM_JSON_VALUE,
+                            schema = @Schema(implementation = ProblemDetail.class)
+                    )
+            ),
+            @ApiResponse(
+                    responseCode = "503",
+                    description = "Timeout o límite 429 impuesto por TETRA CHANNEL (UPSTREAM_UNAVAILABLE)",
+                    content = @Content(
+                            mediaType = MediaType.APPLICATION_PROBLEM_JSON_VALUE,
+                            schema = @Schema(implementation = ProblemDetail.class)
+                    )
+            )
+    })
+    public PlayerRecordsResponse getRecords(@PathVariable("playerId") String playerId) {
+        return playerService.getRecords(playerId);
+    }
+
+    @GetMapping(value = "/{playerId}/tr-estimate", produces = MediaType.APPLICATION_JSON_VALUE)
+    @Operation(
+            summary = "Obtiene la estimación transversal del TR y su explicación mediante el microservicio de IA",
+            description = "Consulta el jugador almacenado en MongoDB, valida las variables requeridas del esquema tr-cross-v1 (apm, pps, vs, gamesPlayed), solicita la inferencia a FastAPI y registra la predicción en la colección predictions."
+    )
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "Estimación de TR o estado model_unavailable obtenido correctamente"),
+            @ApiResponse(
+                    responseCode = "400",
+                    description = "playerId con formato no válido (VALIDATION_FAILED)",
+                    content = @Content(
+                            mediaType = MediaType.APPLICATION_PROBLEM_JSON_VALUE,
+                            schema = @Schema(implementation = ProblemDetail.class)
+                    )
+            ),
+            @ApiResponse(
+                    responseCode = "404",
+                    description = "Jugador no almacenado en la base de datos local (PLAYER_NOT_FOUND)",
+                    content = @Content(
+                            mediaType = MediaType.APPLICATION_PROBLEM_JSON_VALUE,
+                            schema = @Schema(implementation = ProblemDetail.class)
+                    )
+            ),
+            @ApiResponse(
+                    responseCode = "422",
+                    description = "Variables requeridas ausentes o jugador fuera del dominio (PREDICTION_NOT_APPLICABLE)",
+                    content = @Content(
+                            mediaType = MediaType.APPLICATION_PROBLEM_JSON_VALUE,
+                            schema = @Schema(implementation = ProblemDetail.class)
+                    )
+            ),
+            @ApiResponse(
+                    responseCode = "503",
+                    description = "El servicio interno de IA no responde o excedió el timeout (AI_SERVICE_UNAVAILABLE)",
+                    content = @Content(
+                            mediaType = MediaType.APPLICATION_PROBLEM_JSON_VALUE,
+                            schema = @Schema(implementation = ProblemDetail.class)
+                    )
+            )
+    })
+    public TrEstimatePublicResponse getTrEstimate(@PathVariable("playerId") String playerId) {
+        return trEstimateService.estimateTrForPlayer(playerId);
     }
 }

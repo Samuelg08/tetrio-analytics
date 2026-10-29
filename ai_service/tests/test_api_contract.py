@@ -8,6 +8,8 @@ from sklearn.linear_model import Ridge
 from app.config import Settings
 from app.main import create_app
 from training.dataset_loader import load_and_verify_dataset
+from training.evaluate_h2h_glicko2 import evaluate_glicko2_baseline, glicko2_expected_win_prob
+from training.train_tr_cross import train_and_evaluate
 
 
 def test_health_and_model_unavailable_when_no_artifacts_exist(tmp_path: Path) -> None:
@@ -201,3 +203,160 @@ def test_dataset_loader_validates_manifest_and_records(tmp_path: Path) -> None:
 
     with pytest.raises(FileNotFoundError):
         load_and_verify_dataset(tmp_path, "nonexistent-version")
+
+
+def test_train_tr_cross_and_serve_shap_explanation(tmp_path: Path) -> None:
+    dataset_version = "20261020-train-unit"
+    ds_dir = tmp_path / "processed" / dataset_version
+    ds_dir.mkdir(parents=True)
+    out_dir = tmp_path / "artifacts"
+
+    rows = []
+    for i in range(15):
+        player_id = f"{i:024x}"
+        apm = 40.0 + i * 8.0
+        pps = 1.2 + i * 0.1
+        vs = 85.0 + i * 16.0
+        games = 100 + i * 50
+        tr = 10000.0 + i * 950.0
+        rows.append(
+            {
+                "playerId": player_id,
+                "username": f"user{i}",
+                "country": "JP",
+                "xp": 10000.0,
+                "gametime": None,
+                "gamesPlayed": games,
+                "gamesWon": int(games * 0.55),
+                "ranked": True,
+                "tr": tr,
+                "apm": apm,
+                "pps": pps,
+                "vs": vs,
+            }
+        )
+
+    with (ds_dir / "players_league.jsonl").open("w", encoding="utf-8") as fh:
+        for r in rows:
+            fh.write(json.dumps(r) + "\n")
+
+    manifest = {
+        "datasetVersion": dataset_version,
+        "runId": "20261020T120000Z-league",
+        "createdAt": "2026-10-20T12:01:00Z",
+        "extractionWindow": {
+            "startedAt": "2026-10-20T12:00:00Z",
+            "finishedAt": "2026-10-20T12:01:00Z",
+            "durationSeconds": 60,
+        },
+        "sources": [{"endpoint": "GET /users/by/league", "baseUrl": "https://ch.tetr.io/api", "limit": 100, "sessionIdUsed": True}],
+        "featureSchemaVersion": "tr-cross-v1",
+        "transformationsApplied": ["sentinel_-1_to_null"],
+        "counts": {"uniquePlayersExported": len(rows)},
+        "fields": {"tr": {"type": "float", "nullable": True, "nullCount": 0, "nullRate": 0.0}},
+    }
+    (ds_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+
+    card = train_and_evaluate(
+        processed_dir=tmp_path / "processed",
+        dataset_version=dataset_version,
+        output_dir=out_dir,
+    )
+    assert card["modelName"] == "tr-cross-ridge-baseline"
+    assert card["dataSummary"]["zeroImputationApplied"] is False
+    assert "mae" in card["metrics"] and "rmse" in card["metrics"] and "r2" in card["metrics"]
+
+    settings = Settings(
+        ai_model_path=str(out_dir / "model.joblib"),
+        ai_model_card_path=str(out_dir / "model_card.json"),
+    )
+    client = TestClient(create_app(settings=settings))
+
+    est_res = client.post(
+        "/v1/tr-estimate",
+        json={
+            "requestId": "req-shap-1",
+            "featureSchemaVersion": "tr-cross-v1",
+            "features": {"apm": 110.0, "pps": 2.1, "vs": 230.0, "gamesPlayed": 500},
+        },
+    )
+    assert est_res.status_code == 200
+    body = est_res.json()
+    assert body["explanationMethod"] == "shap"
+    assert len(body["explanation"]) == 4
+    features_explained = [item["feature"] for item in body["explanation"]]
+    assert features_explained == ["apm", "pps", "vs", "gamesPlayed"]
+
+
+def test_out_of_season_evaluation_and_glicko2_h2h_baseline(tmp_path: Path) -> None:
+    # 1. Test Glicko-2 expected win probability symmetry and monotonicity
+    prob_equal = glicko2_expected_win_prob(2000.0, 65.0, 2000.0, 65.0)
+    assert abs(prob_equal - 0.5) < 1e-9
+
+    prob_higher = glicko2_expected_win_prob(4662.13, 99.99, 3301.88, 62.89)
+    assert prob_higher > 0.99
+
+    sample_entries = [
+        {
+            "_id": "6adc8fad910a597ea20c6f09",
+            "extras": {
+                "league": {
+                    "5e9d4eec530bc13f9fdcd2c0": [
+                        {"glicko": 4662.1338, "rd": 99.99, "tr": 24863.0561},
+                        {"glicko": 4662.1602, "rd": 99.99, "tr": 24863.0620},
+                    ],
+                    "632d637cc9edd00721369108": [
+                        {"glicko": 3301.8832, "rd": 62.89, "tr": 23906.2534},
+                        {"glicko": 3301.8704, "rd": 63.72, "tr": 23904.9852},
+                    ],
+                },
+                "result": "victory",
+            },
+        }
+    ]
+    h2h_eval = evaluate_glicko2_baseline(sample_entries, "5e9d4eec530bc13f9fdcd2c0")
+    assert h2h_eval["matchesEvaluated"] == 1
+    assert h2h_eval["accuracy"] == 1.0
+    assert h2h_eval["brierScore"] < 0.001
+
+    # 2. Test out-of-season dataset loading via season_league.jsonl
+    season_ver = "20261028-season1-unit"
+    s_dir = tmp_path / "processed" / season_ver
+    s_dir.mkdir(parents=True)
+    rec = {
+        "playerId": "5e7cbb652932b46c9c671ce4",
+        "username": "icly",
+        "country": "VA",
+        "xp": None,
+        "gametime": None,
+        "gamesPlayed": 1075,
+        "gamesWon": 978,
+        "ranked": True,
+        "tr": 24999.69,
+        "apm": 204.26,
+        "pps": 3.52,
+        "vs": 397.26,
+    }
+    (s_dir / "season_league.jsonl").write_text(json.dumps(rec) + "\n", encoding="utf-8")
+    manifest = {
+        "datasetVersion": season_ver,
+        "runId": "20261028T190000Z-season-1",
+        "createdAt": "2026-10-28T19:01:00Z",
+        "extractionWindow": {
+            "startedAt": "2026-10-28T19:00:00Z",
+            "finishedAt": "2026-10-28T19:01:00Z",
+            "durationSeconds": 60,
+        },
+        "sources": [{"endpoint": "GET /users/history/league/1", "baseUrl": "https://ch.tetr.io/api", "limit": 100, "sessionIdUsed": True}],
+        "featureSchemaVersion": "tr-cross-v1",
+        "transformationsApplied": ["sentinel_-1_to_null"],
+        "counts": {"uniquePlayersExported": 1},
+        "fields": {"tr": {"type": "float", "nullable": True, "nullCount": 0, "nullRate": 0.0}},
+    }
+    (s_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+
+    loaded_season = load_and_verify_dataset(tmp_path / "processed", season_ver)
+    assert loaded_season.dataset_version == season_ver
+    assert len(loaded_season.records) == 1
+
+

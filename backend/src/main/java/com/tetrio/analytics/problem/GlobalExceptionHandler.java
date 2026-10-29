@@ -13,6 +13,7 @@ import org.springframework.http.ProblemDetail;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
+import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
@@ -86,6 +87,24 @@ public class GlobalExceptionHandler {
         );
         problem.setProperty("errors", fieldErrors);
 
+        return ResponseEntity.status(ErrorCode.VALIDATION_FAILED.httpStatus())
+                .contentType(MediaType.APPLICATION_PROBLEM_JSON)
+                .body(problem);
+    }
+
+    @ExceptionHandler(MissingServletRequestParameterException.class)
+    public ResponseEntity<ProblemDetail> handleMissingParameter(
+            MissingServletRequestParameterException ex,
+            HttpServletRequest request
+    ) {
+        ProblemDetail problem = buildProblemDetail(
+                ErrorCode.VALIDATION_FAILED,
+                "Uno o más parámetros no son válidos.",
+                request
+        );
+        problem.setProperty("errors", List.of(
+                new FieldValidationError(ex.getParameterName(), "El parámetro '" + ex.getParameterName() + "' es obligatorio")
+        ));
         return ResponseEntity.status(ErrorCode.VALIDATION_FAILED.httpStatus())
                 .contentType(MediaType.APPLICATION_PROBLEM_JSON)
                 .body(problem);

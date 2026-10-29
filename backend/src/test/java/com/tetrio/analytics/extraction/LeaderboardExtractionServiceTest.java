@@ -21,9 +21,13 @@ import com.tetrio.analytics.integration.tetrachannel.dto.TetraLeaderboardData;
 import com.tetrio.analytics.integration.tetrachannel.dto.TetraLeaderboardEntry;
 import com.tetrio.analytics.integration.tetrachannel.dto.TetraLeagueSummaryData;
 import com.tetrio.analytics.integration.tetrachannel.dto.TetraPrisecter;
+import com.tetrio.analytics.integration.tetrachannel.dto.TetraRecordSummaryData;
+import com.tetrio.analytics.integration.tetrachannel.dto.TetraSeasonHistoryData;
+import com.tetrio.analytics.integration.tetrachannel.dto.TetraSeasonHistoryEntry;
 import com.tetrio.analytics.player.PlayerMapper;
 import com.tetrio.analytics.player.persistence.CacheWindowCalculator;
 import com.tetrio.analytics.player.persistence.PlayerPersistenceService;
+import com.tetrio.analytics.player.persistence.RecordDocument;
 import com.tetrio.analytics.problem.ApiProblemException;
 import com.tetrio.analytics.problem.ErrorCode;
 import java.math.BigDecimal;
@@ -221,6 +225,111 @@ class LeaderboardExtractionServiceTest {
         assertThat(completed.counters().duplicatesSkipped()).isEqualTo(1);
     }
 
+    @Test
+    void phase2PlayerEnrichmentSkipsCachedPlayersFetchesLiveAndRejectsMissingUsers() throws Exception {
+        Path rawDir = tempDir.resolve("raw-p2");
+        Path processedDir = tempDir.resolve("processed-p2");
+
+        LeaderboardExtractionService service = createService(rawDir, processedDir, "", "20261020-p2", 2, 0, 1, 2);
+
+        when(playerPersistenceService.findAllExternalPlayerIds(0))
+                .thenReturn(List.of(ID_1, ID_2, ID_3));
+
+        // ID_1 already has valid cached records (cacheValidUntil > FIXED_START)
+        Instant validUntil = FIXED_START.plusSeconds(300);
+        RecordDocument valid40l = new RecordDocument(
+                null, ID_1, "40l", "personal_best", "rec-1", "rep-1", "finalTimeMs", 15000.0, 15000.0, null,
+                40, null, 6.0, 100, 250, 0, 0, 10, 1, FIXED_START, FIXED_START, validUntil, null
+        );
+        RecordDocument validBlitz = new RecordDocument(
+                null, ID_1, "blitz", "personal_best", "rec-2", "rep-2", "score", 900000.0, 120000.0, 900000L,
+                200, 15, 4.5, 500, 1300, 10, 2, 20, 2, FIXED_START, FIXED_START, validUntil, null
+        );
+        when(playerPersistenceService.findRecordsByPlayerId(ID_1))
+                .thenReturn(List.of(valid40l, validBlitz));
+
+        // ID_2 has no cached records -> fetches live 40l and blitz
+        when(playerPersistenceService.findRecordsByPlayerId(ID_2))
+                .thenReturn(List.of());
+        TetraRecordSummaryData summary40l = new TetraRecordSummaryData(
+                new TetraRecordSummaryData.TetraRecordEntry(
+                        "rec-40l", "rep-40l", "40l", "2025-05-10T18:10:02.286Z",
+                        new TetraRecordSummaryData.TetraRecordResults(
+                                new TetraRecordSummaryData.TetraRecordAggregateStats(0.0, 5.5, 0.0),
+                                new TetraRecordSummaryData.TetraRecordStats(
+                                        18000.0, 50000L, 40, 0, 250, 100, 0,
+                                        new TetraRecordSummaryData.TetraRecordFinesse(100, 1, 99)
+                                )
+                        )
+                ),
+                120,
+                5
+        );
+        TetraRecordSummaryData summaryBlitz = new TetraRecordSummaryData(null, -1, -1);
+        when(tetraChannelClient.fetchRecordSummary(eq(ID_2), eq("40l"), anyString()))
+                .thenReturn(new TetraChannelResponse<>(summary40l, null));
+        when(tetraChannelClient.fetchRecordSummary(eq(ID_2), eq("blitz"), anyString()))
+                .thenReturn(new TetraChannelResponse<>(summaryBlitz, null));
+
+        // ID_3 returns PLAYER_NOT_FOUND -> rejected without retrying
+        when(playerPersistenceService.findRecordsByPlayerId(ID_3))
+                .thenReturn(List.of());
+        when(tetraChannelClient.fetchRecordSummary(eq(ID_3), eq("40l"), anyString()))
+                .thenThrow(new ApiProblemException(ErrorCode.PLAYER_NOT_FOUND, "No such user"));
+
+        ExtractionCheckpoint result = service.runPhase2PlayerEnrichment();
+
+        assertThat(result.status()).isEqualTo("completed");
+        assertThat(result.phase()).isEqualTo(LeaderboardExtractionService.PHASE_PLAYER_ENRICHMENT);
+        assertThat(result.pagesCompleted()).isEqualTo(2);
+        assertThat(result.counters().playersSeen()).isEqualTo(3);
+        assertThat(result.counters().cachedSkipped()).isEqualTo(1);
+        assertThat(result.counters().uniquePlayers()).isEqualTo(1);
+        assertThat(result.counters().rejectedRecords()).isEqualTo(1);
+
+        verify(playerPersistenceService, times(1)).savePlayerRecords(any());
+        Path datasetDir = processedDir.resolve("20261020-p2");
+        assertThat(datasetDir.resolve("player_records.jsonl")).exists();
+        assertThat(datasetDir.resolve("rejected.jsonl")).exists();
+    }
+
+    @Test
+    void phase3SeasonHistoryPaginatesAndWritesManifest() throws Exception {
+        Path rawDir = tempDir.resolve("raw-p3");
+        Path processedDir = tempDir.resolve("processed-p3");
+
+        LeaderboardExtractionService service = createService(rawDir, processedDir, "", "20261020-season1", 2, 0, 1, 2);
+
+        TetraSeasonHistoryEntry s1 = new TetraSeasonHistoryEntry(
+                ID_1, "1", "icly", "VA", 1, 1075, 978,
+                4498.88, 99.998, 24999.69, 97.02, "x", "x", true,
+                new TetraPrisecter(new BigDecimal("24999.69"), BigDecimal.ZERO, BigDecimal.ZERO),
+                204.26, 3.52, 397.26
+        );
+        when(tetraChannelClient.fetchSeasonLeaderboardPage(eq("1"), eq(2), isNull(), anyString()))
+                .thenReturn(new TetraChannelResponse<>(
+                        new TetraSeasonHistoryData(List.of(s1)),
+                        null,
+                        "{\"success\":true,\"season\":\"1\"}"
+                ));
+
+        ExtractionCheckpoint result = service.runPhase3SeasonHistory("1");
+
+        assertThat(result.status()).isEqualTo("completed");
+        assertThat(result.phase()).isEqualTo(LeaderboardExtractionService.PHASE_SEASON_HISTORY);
+        assertThat(result.pagesCompleted()).isEqualTo(1);
+        assertThat(result.counters().uniquePlayers()).isEqualTo(1);
+
+        Path datasetDir = processedDir.resolve("20261020-season1");
+        assertThat(datasetDir.resolve("season_league.jsonl")).exists();
+        ExtractionManifest manifest = objectMapper.readValue(
+                datasetDir.resolve("manifest.json").toFile(),
+                ExtractionManifest.class
+        );
+        assertThat(manifest.sources().getFirst().endpoint()).isEqualTo("GET /users/history/league/1");
+        assertThat(manifest.counts().uniquePlayersExported()).isEqualTo(1);
+    }
+
     private LeaderboardExtractionService createService(
             Path rawDir,
             Path processedDir,
@@ -235,6 +344,7 @@ class LeaderboardExtractionServiceTest {
                 new AppProperties.CorsProperties(List.of("http://localhost:5173")),
                 new AppProperties.TetraChannelProperties("https://ch.tetr.io/api", 5000L, 1100L, 3000L, "test-agent"),
                 new AppProperties.CacheProperties(300L),
+                new AppProperties.AiServiceProperties("http://127.0.0.1:8000", 3000L),
                 new AppProperties.ExtractionProperties(
                         true,
                         List.of("leaderboard_league"),

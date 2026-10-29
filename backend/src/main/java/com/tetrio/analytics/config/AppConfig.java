@@ -29,4 +29,18 @@ public class AppConfig {
                 .baseUrl(properties.tetraChannel().baseUrl())
                 .requestFactory(requestFactory);
     }
+
+    @Bean
+    public RestClient.Builder aiServiceRestClientBuilder(AppProperties properties) {
+        long timeoutMs = properties.aiService().timeoutMs();
+        HttpClient httpClient = HttpClient.newBuilder()
+                .connectTimeout(Duration.ofMillis(timeoutMs))
+                .build();
+        JdkClientHttpRequestFactory requestFactory = new JdkClientHttpRequestFactory(httpClient);
+        requestFactory.setReadTimeout(Duration.ofMillis(timeoutMs));
+
+        return RestClient.builder()
+                .baseUrl(properties.aiService().baseUrl())
+                .requestFactory(requestFactory);
+    }
 }

@@ -8,6 +8,8 @@ import com.tetrio.analytics.integration.tetrachannel.dto.TetraChannelResponse;
 import com.tetrio.analytics.integration.tetrachannel.dto.TetraGeneralStatsData;
 import com.tetrio.analytics.integration.tetrachannel.dto.TetraLeaderboardData;
 import com.tetrio.analytics.integration.tetrachannel.dto.TetraLeagueSummaryData;
+import com.tetrio.analytics.integration.tetrachannel.dto.TetraRecordSummaryData;
+import com.tetrio.analytics.integration.tetrachannel.dto.TetraSeasonHistoryData;
 import com.tetrio.analytics.integration.tetrachannel.dto.TetraUserData;
 import com.tetrio.analytics.problem.ApiProblemException;
 import com.tetrio.analytics.problem.ErrorCode;
@@ -15,6 +17,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.Locale;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatusCode;
 import org.springframework.http.MediaType;
@@ -37,7 +40,7 @@ public class TetraChannelClient {
     private final String userAgent;
 
     public TetraChannelClient(
-            RestClient.Builder tetraChannelRestClientBuilder,
+            @Qualifier("tetraChannelRestClientBuilder") RestClient.Builder tetraChannelRestClientBuilder,
             TetraChannelRateLimiter rateLimiter,
             ObjectMapper objectMapper,
             AppProperties properties
@@ -66,6 +69,20 @@ public class TetraChannelClient {
         );
     }
 
+    public TetraChannelResponse<TetraRecordSummaryData> fetchRecordSummary(
+            String userIdentifier,
+            String mode,
+            String sessionId
+    ) {
+        return get(
+                "/users/{userIdentifier}/summaries/{mode}",
+                new TypeReference<TetraChannelEnvelope<TetraRecordSummaryData>>() {},
+                sessionId,
+                userIdentifier,
+                mode
+        );
+    }
+
     public TetraChannelResponse<TetraLeaderboardData> fetchLeagueLeaderboardPage(
             int limit,
             String afterCursor,
@@ -87,6 +104,38 @@ public class TetraChannelClient {
                 "/users/by/league?limit={limit}&after=" + trimmedCursor,
                 new TypeReference<TetraChannelEnvelope<TetraLeaderboardData>>() {},
                 sessionId,
+                limit
+        );
+    }
+
+    public TetraChannelResponse<TetraSeasonHistoryData> fetchSeasonLeaderboardPage(
+            String season,
+            int limit,
+            String afterCursor,
+            String sessionId
+    ) {
+        if (season == null || season.isBlank()) {
+            throw new IllegalArgumentException("El parámetro season no puede ser vacío.");
+        }
+        String trimmedSeason = season.trim();
+        if (afterCursor == null || afterCursor.isBlank()) {
+            return get(
+                    "/users/history/league/{season}?limit={limit}",
+                    new TypeReference<TetraChannelEnvelope<TetraSeasonHistoryData>>() {},
+                    sessionId,
+                    trimmedSeason,
+                    limit
+            );
+        }
+        String trimmedCursor = afterCursor.trim();
+        if (!PRISECTER_CURSOR_PATTERN.matcher(trimmedCursor).matches()) {
+            throw new IllegalArgumentException("Cursor prisecter con formato inválido: " + trimmedCursor);
+        }
+        return get(
+                "/users/history/league/{season}?limit={limit}&after=" + trimmedCursor,
+                new TypeReference<TetraChannelEnvelope<TetraSeasonHistoryData>>() {},
+                sessionId,
+                trimmedSeason,
                 limit
         );
     }

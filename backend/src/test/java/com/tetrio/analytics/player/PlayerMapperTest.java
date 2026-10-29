@@ -5,12 +5,16 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.tetrio.analytics.integration.tetrachannel.dto.TetraChannelCache;
 import com.tetrio.analytics.integration.tetrachannel.dto.TetraLeagueSummaryData;
+import com.tetrio.analytics.integration.tetrachannel.dto.TetraRecordSummaryData;
 import com.tetrio.analytics.integration.tetrachannel.dto.TetraUserData;
 import com.tetrio.analytics.player.dto.DataSource;
 import com.tetrio.analytics.player.dto.LeagueSummaryDto;
 import com.tetrio.analytics.player.dto.PlayerProfileResponse;
+import com.tetrio.analytics.player.dto.PlayerRecordsResponse.ModeRecordDto;
+import com.tetrio.analytics.player.dto.PlayerStatisticsResponse;
 import com.tetrio.analytics.player.persistence.CacheWindowCalculator.EffectiveCacheWindow;
 import com.tetrio.analytics.player.persistence.PlayerDocument;
+import com.tetrio.analytics.player.persistence.RecordDocument;
 import com.tetrio.analytics.player.persistence.SnapshotDocument;
 import com.tetrio.analytics.problem.ApiProblemException;
 import com.tetrio.analytics.problem.ErrorCode;
@@ -210,5 +214,102 @@ class PlayerMapperTest {
         assertThat(fromCache.username()).isEqualTo("5han");
         assertThat(fromCache.dataSource()).isEqualTo(DataSource.CACHE);
         assertThat(fromCache.league()).isEqualTo(league);
+    }
+
+    @Test
+    void computesDerivedStatisticsAndPropagatesNullWhenDenominatorIsZeroOrMissing() {
+        String playerId = "5e9d4eec530bc13f9fdcd2c0";
+        PlayerDocument activeDoc = new PlayerDocument(
+                "doc-1",
+                playerId,
+                "5han",
+                "5han",
+                "JP",
+                new PlayerDocument.ProfileMetadata(50000.0, 7200.0),
+                new LeagueSummaryDto(100, 75, true, 24000.0, 2200.0, 65.0, 99.0, "x", "x", 150.0, 2.5, 300.0, 10, 0.01, false),
+                FIXED_NOW,
+                FIXED_NOW,
+                FIXED_NOW,
+                "k1",
+                1
+        );
+
+        PlayerStatisticsResponse stats = mapper.toPlayerStatistics(activeDoc);
+        assertThat(stats.derived().gamesLost()).isEqualTo(25);
+        assertThat(stats.derived().winRate()).isEqualTo(0.75);
+        assertThat(stats.derived().attackPerPiece()).isEqualTo(1.0);
+        assertThat(stats.derived().vsPerApm()).isEqualTo(2.0);
+        assertThat(stats.derived().gametimeHours()).isEqualTo(2.0);
+        assertThat(stats.definitions()).hasSize(5);
+
+        PlayerDocument zeroDoc = new PlayerDocument(
+                "doc-2",
+                playerId,
+                "newuser",
+                "newuser",
+                null,
+                new PlayerDocument.ProfileMetadata(0.0, null),
+                new LeagueSummaryDto(0, 0, false, null, null, null, null, null, null, 0.0, 0.0, 0.0, null, null, false),
+                FIXED_NOW,
+                FIXED_NOW,
+                FIXED_NOW,
+                "k2",
+                1
+        );
+
+        PlayerStatisticsResponse zeroStats = mapper.toPlayerStatistics(zeroDoc);
+        assertThat(zeroStats.derived().gamesLost()).isZero();
+        assertThat(zeroStats.derived().winRate()).isNull();
+        assertThat(zeroStats.derived().attackPerPiece()).isNull();
+        assertThat(zeroStats.derived().vsPerApm()).isNull();
+        assertThat(zeroStats.derived().gametimeHours()).isNull();
+    }
+
+    @Test
+    void mapsRecordSummaryDataWithNegativeOneRankToNullAndCalculatesKpp() {
+        String playerId = "5e9d4eec530bc13f9fdcd2c0";
+        TetraRecordSummaryData summary40l = new TetraRecordSummaryData(
+                new TetraRecordSummaryData.TetraRecordEntry(
+                        "6870bcd3ee681267d377b740",
+                        "replay-40l",
+                        "40l",
+                        "2025-07-11T07:27:15.930Z",
+                        new TetraRecordSummaryData.TetraRecordResults(
+                                new TetraRecordSummaryData.TetraRecordAggregateStats(0.0, 6.2668, 0.0),
+                                new TetraRecordSummaryData.TetraRecordStats(
+                                        16130.0,
+                                        13668L,
+                                        40,
+                                        1,
+                                        303,
+                                        101,
+                                        0,
+                                        new TetraRecordSummaryData.TetraRecordFinesse(10, 6, 95)
+                                )
+                        )
+                ),
+                36,
+                -1
+        );
+
+        RecordDocument doc40l = mapper.toRecordDocument(
+                playerId,
+                "40l",
+                summary40l,
+                new TetraChannelCache("hit", 1_700_000_000_000L, 1_700_000_300_000L),
+                FIXED_NOW,
+                FIXED_NOW.plusSeconds(300),
+                "sess-1"
+        );
+
+        ModeRecordDto dto = mapper.toModeRecordDto(doc40l);
+        assertThat(dto).isNotNull();
+        assertThat(dto.mode()).isEqualTo("40l");
+        assertThat(dto.primaryMetric()).isEqualTo("finalTimeMs");
+        assertThat(dto.primaryValue()).isEqualTo(16130.0);
+        assertThat(dto.kpp()).isEqualTo(3.0);
+        assertThat(dto.globalRank()).isEqualTo(36);
+        assertThat(dto.countryRank()).isNull();
+        assertThat(dto.finesseFaults()).isEqualTo(6);
     }
 }
