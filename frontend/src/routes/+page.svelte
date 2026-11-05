@@ -3,15 +3,26 @@
 	import {
 		demoProfile,
 		fetchPlayerProfile,
+		fetchPlayerSnapshots,
 		PlayerApiError,
-		type PlayerProfile
+		type PlayerProfile,
+		type SnapshotPage
 	} from '../lib/player';
+	import { demoSnapshots } from '../lib/fixtures/player.fixture';
+	import { buildSnapshotChartPoints } from '../lib/snapshot-chart';
 
 	let username = $state('');
 	let profile = $state<PlayerProfile | null>(null);
 	let isLoading = $state(false);
 	let errorMessage = $state('');
 	let isDemo = $state(false);
+	let snapshots = $state<SnapshotPage | null>(null);
+	let isLoadingSnapshots = $state(false);
+	let snapshotError = $state('');
+	let snapshotFilterError = $state('');
+	let snapshotsPageNumber = $state(0);
+	let historyFrom = $state('');
+	let historyTo = $state('');
 
 	const sourceLabels = {
 		live: 'Actualizado en vivo',
@@ -52,6 +63,12 @@
 		}).format(parsed);
 	}
 
+	function formatDay(date: string): string {
+		const parsed = new Date(date);
+		if (Number.isNaN(parsed.getTime())) return 'Fecha inválida';
+		return new Intl.DateTimeFormat('es-CO', { dateStyle: 'medium', timeZone: 'America/Bogota' }).format(parsed);
+	}
+
 	async function searchPlayer(event: SubmitEvent) {
 		event.preventDefault();
 		const query = username.trim();
@@ -59,9 +76,16 @@
 
 		isLoading = true;
 		errorMessage = '';
+		snapshotError = '';
+		snapshots = null;
+		historyFrom = '';
+		historyTo = '';
 		isDemo = false;
 		try {
-			profile = await fetchPlayerProfile(query, PUBLIC_API_BASE_URL ?? undefined);
+			const result = await fetchPlayerProfile(query, PUBLIC_API_BASE_URL ?? undefined);
+			profile = result;
+			snapshotsPageNumber = 0;
+			await loadSnapshots(result.playerId, 0);
 		} catch (error) {
 			profile = null;
 			if (error instanceof PlayerApiError) {
@@ -90,7 +114,72 @@
 		username = demoProfile.username;
 		errorMessage = '';
 		isDemo = true;
+		snapshotsPageNumber = 0;
+		void loadSnapshots(demoProfile.playerId, 0);
 	}
+
+	function dateFilterBounds() {
+		return {
+			from: historyFrom ? new Date(`${historyFrom}T00:00:00`).toISOString() : undefined,
+			to: historyTo ? new Date(`${historyTo}T23:59:59.999`).toISOString() : undefined
+		};
+	}
+
+	async function loadSnapshots(playerId: string, page: number) {
+		isLoadingSnapshots = true;
+		snapshotError = '';
+		snapshotFilterError = '';
+		try {
+			if (isDemo) {
+				const { from, to } = dateFilterBounds();
+				const fromTime = from ? Date.parse(from) : Number.NEGATIVE_INFINITY;
+				const toTime = to ? Date.parse(to) : Number.POSITIVE_INFINITY;
+				const filtered = demoSnapshots.filter((item) => {
+					const capturedAt = Date.parse(item.capturedAt);
+					return capturedAt >= fromTime && capturedAt <= toTime;
+				});
+				snapshots = { items: filtered, page: 0, size: 100, totalItems: filtered.length, totalPages: filtered.length ? 1 : 0 };
+				snapshotsPageNumber = 0;
+				return;
+			}
+
+			snapshots = await fetchPlayerSnapshots(
+				playerId,
+				{ ...dateFilterBounds(), page, size: 100 },
+				PUBLIC_API_BASE_URL
+			);
+			snapshotsPageNumber = snapshots.page;
+		} catch (error) {
+			snapshots = null;
+			snapshotError = error instanceof PlayerApiError && error.code === 'PLAYER_NOT_FOUND'
+				? 'El perfil existe, pero todavía no hay snapshots guardados para mostrar.'
+				: error instanceof PlayerApiError
+					? error.message
+					: 'No se pudo cargar el historial. Inténtalo de nuevo.';
+		} finally {
+			isLoadingSnapshots = false;
+		}
+	}
+
+	function applySnapshotFilters(event: SubmitEvent) {
+		event.preventDefault();
+		if (!profile) return;
+		if (historyFrom && historyTo && historyFrom > historyTo) {
+			snapshotFilterError = 'La fecha inicial debe ser anterior o igual a la fecha final.';
+			return;
+		}
+		void loadSnapshots(profile.playerId, 0);
+	}
+
+	function changeSnapshotPage(offset: number) {
+		if (!profile || !snapshots) return;
+		const nextPage = snapshotsPageNumber + offset;
+		if (nextPage < 0 || nextPage >= snapshots.totalPages) return;
+		void loadSnapshots(profile.playerId, nextPage);
+	}
+
+	const chartPoints = $derived(buildSnapshotChartPoints(snapshots?.items ?? []));
+	const chartPolyline = $derived(chartPoints.map((point) => `${point.x},${point.y}`).join(' '));
 </script>
 
 <svelte:head>
@@ -191,6 +280,73 @@
 				{:else}
 					<div class="notice empty-league"><strong>Sin resumen de liga</strong><p>El backend encontró el perfil, pero TETRA LEAGUE aún no tiene estadísticas disponibles.</p></div>
 				{/if}
+
+				<section class="history-panel" aria-labelledby="history-title">
+					<div class="history-heading">
+						<div>
+							<p class="eyebrow"><span>02</span> EVOLUCIÓN</p>
+							<h3 id="history-title">Historial de TR</h3>
+							<p class="history-caption">Snapshots guardados por el backend en orden cronológico.</p>
+						</div>
+						{#if snapshots}<span class="history-count">{snapshots.totalItems.toLocaleString('es-CO')} registros</span>{/if}
+					</div>
+
+					<form class="history-filters" onsubmit={applySnapshotFilters}>
+						<div class="date-field"><label for="history-from">DESDE</label><input id="history-from" type="date" bind:value={historyFrom} /></div>
+						<div class="date-field"><label for="history-to">HASTA</label><input id="history-to" type="date" bind:value={historyTo} /></div>
+						<button class="filter-button" type="submit" disabled={isLoadingSnapshots}>Aplicar fechas</button>
+					</form>
+
+					{#if snapshotFilterError}<p class="filter-error" role="alert">{snapshotFilterError}</p>{/if}
+					{#if isLoadingSnapshots}
+						<p class="history-state" role="status">Cargando snapshots…</p>
+					{:else if snapshotError}
+						<div class="notice history-error" role="alert"><div><strong>Historial no disponible</strong><p>{snapshotError}</p></div><button class="text-button" type="button" onclick={() => profile && loadSnapshots(profile.playerId, snapshotsPageNumber)}>Reintentar</button></div>
+					{:else if snapshots && snapshots.items.length === 0}
+						<p class="history-state">No hay snapshots para este jugador en el periodo seleccionado.</p>
+					{:else if snapshots}
+						{@const pointsWithTr = chartPoints}
+						{#if pointsWithTr.length > 0}
+							<div class="chart-shell">
+								<svg class="history-chart" viewBox="0 0 720 250" role="img" aria-label="Evolución de TR en los snapshots cargados">
+									<line class="chart-grid" x1="48" x2="672" y1="44" y2="44" />
+									<line class="chart-grid" x1="48" x2="672" y1="124" y2="124" />
+									<line class="chart-grid" x1="48" x2="672" y1="204" y2="204" />
+									<text class="chart-label" x="7" y="48">TR alto</text>
+									<text class="chart-label" x="7" y="208">TR bajo</text>
+									{#if pointsWithTr.length > 1}<polyline class="chart-line" points={chartPolyline} />{/if}
+									{#each pointsWithTr as point (point.item.capturedAt)}
+										<circle class="chart-point" cx={point.x} cy={point.y} r="4"><title>{formatDay(point.item.capturedAt)} · TR {Math.round(point.tr).toLocaleString('es-CO')}</title></circle>
+									{/each}
+									<text class="chart-date" x="48" y="238">{formatDay(pointsWithTr[0].item.capturedAt)}</text>
+									<text class="chart-date" x="672" y="238" text-anchor="end">{formatDay(pointsWithTr[pointsWithTr.length - 1].item.capturedAt)}</text>
+								</svg>
+								<p class="chart-note">Cada punto representa un snapshot persistido. La línea conecta observaciones disponibles; no es una predicción.</p>
+							</div>
+						{:else}
+							<p class="history-state">Hay snapshots, pero no contienen valores de TR para graficar.</p>
+						{/if}
+
+						<div class="table-wrap">
+							<table>
+								<caption>Snapshots cargados, del más antiguo al más reciente</caption>
+								<thead><tr><th scope="col">Fecha</th><th scope="col">TR</th><th scope="col">Rango</th><th scope="col">Partidas</th></tr></thead>
+								<tbody>
+									{#each snapshots.items as snapshot (snapshot.capturedAt)}
+										<tr><td>{formatDay(snapshot.capturedAt)}</td><td>{snapshot.tr === null ? 'Sin dato' : Math.round(snapshot.tr).toLocaleString('es-CO')}</td><td>{snapshot.rank ?? 'Sin dato'}</td><td>{snapshot.gamesPlayed.toLocaleString('es-CO')}</td></tr>
+									{/each}
+								</tbody>
+							</table>
+						</div>
+						{#if snapshots.totalPages > 1}
+							<nav class="history-pagination" aria-label="Paginación del historial">
+								<button type="button" class="filter-button secondary" onclick={() => changeSnapshotPage(-1)} disabled={snapshotsPageNumber === 0 || isLoadingSnapshots}>Anterior</button>
+								<span>Página {snapshotsPageNumber + 1} de {snapshots.totalPages}</span>
+								<button type="button" class="filter-button secondary" onclick={() => changeSnapshotPage(1)} disabled={snapshotsPageNumber + 1 >= snapshots.totalPages || isLoadingSnapshots}>Siguiente</button>
+							</nav>
+						{/if}
+					{/if}
+				</section>
 			</section>
 		{:else if !errorMessage}
 			<section class="empty-state" aria-label="Inicia una búsqueda">
@@ -256,7 +412,36 @@
 	.metric-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 9px; }
 	.metric-card { min-height: 86px; padding: 15px; border: 1px solid #ffffff14; border-radius: 5px; background: #111617; }.metric-card p { margin: 0 0 11px; color: #838d83; font-size: 9px; letter-spacing: .12em; text-transform: uppercase; }.metric-card strong { color: #e8ebe3; font-size: 19px; letter-spacing: -.04em; }.metric-card.featured { border-color: #b9f36b38; background: linear-gradient(135deg, #b9f36b0d, #111617 70%); }.metric-card.featured strong { color: #b9f36b; }
 	.record-strip { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 10px; padding: 16px; border: 1px solid #ffffff14; border-radius: 5px; background: #111617; }.record-strip div { display: flex; flex-direction: column; gap: 8px; }.record-strip span { color: #838d83; font-size: 8px; letter-spacing: .1em; }.record-strip strong { font-size: 13px; font-weight: 600; }
+	.history-panel { margin-top: 45px; padding-top: 24px; border-top: 1px solid #ffffff18; }
+	.history-heading { display: flex; justify-content: space-between; align-items: flex-end; gap: 16px; }
+	.history-heading h3 { margin: 8px 0 5px; font-size: 20px; letter-spacing: -.04em; }
+	.history-caption, .history-count { margin: 0; color: #828c82; font-size: 10px; }
+	.history-count { padding-bottom: 4px; white-space: nowrap; }
+	.history-filters { display: flex; align-items: flex-end; gap: 10px; margin: 18px 0 12px; }
+	.date-field { display: flex; flex-direction: column; gap: 7px; }
+	.date-field label { color: #899289; font-size: 8px; font-weight: 700; letter-spacing: .14em; }
+	.date-field input { height: 37px; width: 150px; padding: 0 9px; border: 1px solid #ffffff20; border-radius: 4px; color: #e6eae2; background: #111617; color-scheme: dark; font-size: 11px; }
+	.filter-button { min-height: 37px; padding: 0 13px; border: 1px solid #b9f36b45; border-radius: 4px; color: #b9f36b; background: #b9f36b0d; font-size: 10px; font-weight: 650; cursor: pointer; }
+	.filter-button:hover:not(:disabled) { background: #b9f36b19; }
+	.filter-button:disabled { opacity: .45; cursor: not-allowed; }
+	.filter-button.secondary { border-color: #ffffff25; color: #c6ccc4; background: #ffffff08; }
+	.filter-error { margin: 8px 0; color: #f2a18c; font-size: 11px; }
+	.history-state { margin: 0; padding: 20px 14px; border: 1px solid #ffffff15; border-radius: 5px; color: #9ca49c; background: #111617; font-size: 11px; }
+	.chart-shell { margin: 12px 0; padding: 12px 14px 9px; border: 1px solid #ffffff15; border-radius: 5px; background: #111617; }
+	.history-chart { display: block; width: 100%; max-height: 290px; overflow: visible; }
+	.chart-grid { stroke: #ffffff16; stroke-width: 1; stroke-dasharray: 3 6; }
+	.chart-label, .chart-date { fill: #788278; font-family: inherit; font-size: 10px; }
+	.chart-line { fill: none; stroke: #b9f36b; stroke-width: 2.5; stroke-linecap: round; stroke-linejoin: round; }
+	.chart-point { fill: #0b0e0f; stroke: #c9ff7e; stroke-width: 2.5; }
+	.chart-note { margin: 0; color: #747e75; font-size: 9px; line-height: 1.5; }
+	.table-wrap { overflow-x: auto; border: 1px solid #ffffff15; border-radius: 5px; }
+	table { width: 100%; border-collapse: collapse; background: #111617; font-size: 10px; text-align: left; }
+	caption { padding: 11px 12px; color: #828c82; text-align: left; }
+	th, td { padding: 10px 12px; border-top: 1px solid #ffffff10; white-space: nowrap; }
+	th { color: #9ca69b; font-size: 8px; letter-spacing: .12em; text-transform: uppercase; }
+	td { color: #d8ddd5; }
+	.history-pagination { display: flex; align-items: center; justify-content: center; gap: 15px; margin-top: 12px; color: #8c968c; font-size: 10px; }
 	.notice { display: flex; align-items: center; justify-content: space-between; gap: 15px; margin: 20px auto 0; max-width: 820px; padding: 14px 16px; border: 1px solid #ffffff1a; border-radius: 5px; background: #111617; }.notice strong { display: block; font-size: 12px; }.notice p { margin: 5px 0 0; color: #9aa39a; font-size: 11px; line-height: 1.5; }.error-notice { border-color: #ed8b7144; }.error-notice strong { color: #f2a18c; }.demo-notice { justify-content: flex-start; border-color: #f2bd7540; color: #f2bd75; }.demo-notice span { color: #a8afa7; font-size: 11px; }.text-button { flex: 0 0 auto; border: 0; padding: 8px; color: #b9f36b; background: transparent; font-size: 10px; cursor: pointer; text-decoration: underline; text-underline-offset: 3px; }.empty-league { margin-top: 10px; display: block; }
 	footer { min-height: 64px; display: flex; justify-content: space-between; align-items: center; padding: 0 clamp(22px, 7vw, 112px); border-top: 1px solid #ffffff12; color: #727b72; font-size: 9px; letter-spacing: .06em; }footer span:first-child { color: #a3aca2; font-weight: 700; letter-spacing: .13em; }
-	@media (max-width: 600px) { main { padding-top: 57px; }.topbar { height: 65px; }.brand { font-size: 11px; }.topbar-status { font-size: 8px; }.search-form { padding: 14px; }.search-row { flex-direction: column; }.search-button { width: 100%; }.profile-heading { align-items: flex-start; flex-wrap: wrap; }.sync-info { width: 100%; margin-left: 71px; align-items: flex-start; }.metric-grid { grid-template-columns: repeat(2, 1fr); }.record-strip { grid-template-columns: 1fr; }.league-summary { gap: 12px; align-items: flex-start; flex-direction: column; }.notice { align-items: flex-start; flex-direction: column; }.demo-notice span { line-height: 1.5; }footer { gap: 15px; align-items: flex-start; flex-direction: column; justify-content: center; padding-top: 15px; padding-bottom: 15px; } }
+	@media (max-width: 600px) { main { padding-top: 57px; }.topbar { height: 65px; }.brand { font-size: 11px; }.topbar-status { font-size: 8px; }.search-form { padding: 14px; }.search-row { flex-direction: column; }.search-button { width: 100%; }.profile-heading { align-items: flex-start; flex-wrap: wrap; }.sync-info { width: 100%; margin-left: 71px; align-items: flex-start; }.metric-grid { grid-template-columns: repeat(2, 1fr); }.record-strip { grid-template-columns: 1fr; }.league-summary { gap: 12px; align-items: flex-start; flex-direction: column; }.history-filters { align-items: stretch; flex-wrap: wrap; }.date-field { flex: 1; min-width: 130px; }.date-field input { width: 100%; }.filter-button { align-self: flex-end; }.history-heading { align-items: flex-start; }.history-count { padding-top: 24px; }.chart-shell { padding: 8px; }.chart-label { font-size: 8px; }.chart-date { font-size: 8px; }.history-pagination { gap: 8px; }.notice { align-items: flex-start; flex-direction: column; }.demo-notice span { line-height: 1.5; }footer { gap: 15px; align-items: flex-start; flex-direction: column; justify-content: center; padding-top: 15px; padding-bottom: 15px; } }
 </style>
