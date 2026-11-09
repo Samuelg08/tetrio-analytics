@@ -10,6 +10,7 @@
 	} from '../lib/player';
 	import { demoSnapshots } from '../lib/fixtures/player.fixture';
 	import { buildSnapshotChartPoints } from '../lib/snapshot-chart';
+	import TrEstimatePanel from '../lib/TrEstimatePanel.svelte';
 
 	let username = $state('');
 	let profile = $state<PlayerProfile | null>(null);
@@ -280,6 +281,8 @@
 				{:else}
 					<div class="notice empty-league"><strong>Sin resumen de liga</strong><p>El backend encontró el perfil, pero TETRA LEAGUE aún no tiene estadísticas disponibles.</p></div>
 				{/if}
+
+				<TrEstimatePanel playerId={profile.playerId} league={profile.league} {isDemo} />
 
 				<section class="history-panel" aria-labelledby="history-title">
 					<div class="history-heading">

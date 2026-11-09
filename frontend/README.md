@@ -36,6 +36,13 @@ Abre `http://localhost:5173`. `PUBLIC_API_BASE_URL` debe apuntar a la base `/api
 - Incluir tabla accesible de observaciones, estados de carga/error/vacío y paginación.
 - En modo demostración, usar fixtures identificados explícitamente como sintéticos; no enviar solicitudes de historial al backend.
 
+### Estimación de TR con IA
+
+- Solicitar `GET /api/players/{playerId}/tr-estimate` únicamente desde perfiles reales con APM, PPS, VS y partidas disponibles.
+- Mostrar el TR estimado, el TR observado como referencia, la versión del modelo y las contribuciones devueltas por el servicio.
+- Explicar los estados de datos insuficientes, modelo aún no entrenado y servicio no disponible; el modo demostración nunca genera predicciones.
+- La estimación es transversal y estadística: no representa un pronóstico ni demuestra causalidad.
+
 ## Comandos
 
 ```powershell
